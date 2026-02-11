@@ -3,3 +3,4 @@ Pillow
 Werkzeug
 opencv-python
 flask-cors
+numpy

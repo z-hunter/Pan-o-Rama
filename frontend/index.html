@@ -73,6 +73,10 @@
                     <h4>Add Room</h4>
                     <input type="text" id="sceneName" placeholder="e.g. Lobby">
                     <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
+                    <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+                        <input type="checkbox" id="isPano" style="width:auto;">
+                        <label for="isPano">This is a 360° Panorama</label>
+                    </div>
                     <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Room</button>
                     <button class="btn btn-primary" id="gotoStep3" style="display:none; margin-top:15px;" onclick="startLinking()">Link Rooms &rarr;</button>
                 </div>
@@ -146,23 +150,30 @@
         async function addScene() {
             const name = document.getElementById('sceneName').value;
             const files = document.getElementById('sceneFiles').files;
+            const isPano = document.getElementById('isPano').checked;
             if (!name || files.length === 0) return alert("Fill all fields");
 
             const formData = new FormData();
             formData.append('scene_name', name);
-            formData.append('is_panorama', 'true');
+            formData.append('is_panorama', isPano ? 'true' : 'false');
             for(let f of files) formData.append('files[]', f);
 
             setLoading(true, "Stitching Panorama...");
             try {
                 const res = await fetch(`/api/project/${projectId}/scene/add`, { method: 'POST', body: formData });
                 const data = await res.json();
+                if (data.error) {
+                    alert("Error processing room: " + data.error);
+                    return;
+                }
                 scenes.push(data.scene);
                 updateScenesUI();
                 document.getElementById('gotoStep3').style.display = 'block';
                 document.getElementById('sceneName').value = '';
                 document.getElementById('sceneFiles').value = '';
                 if (!activeSceneId) loadScene(data.scene.id);
+            } catch (e) {
+                alert("Network error or server crash. Check logs.");
             } finally { setLoading(false); }
         }
 
@@ -187,10 +198,15 @@
             const url = `/galleries/${projectId}/${id}/${scene.panorama || scene.images[0]}`;
             
             const config = {
-                "type": "equirectangular",
+                "type": scene.type || "equirectangular",
+                "hfov": 70,
+                "haov": scene.haov || 100,
+                "vaov": scene.vaov || 60,
                 "panorama": url,
                 "autoLoad": true,
                 "sceneFadeDuration": 1000,
+                "minHfov": 30,
+                "maxHfov": scene.haov || 100,
                 "hotSpots": scene.hotspots.map(h => ({
                     pitch: h.pitch, yaw: h.yaw, 
                     cssClass: "custom-hotspot",
