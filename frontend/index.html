@@ -3,106 +3,168 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lokalny Obiektyw Uploader</title>
+    <title>Pan-o-Rama - Step-by-Step Creator</title>
     <style>
-        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; color: #333; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
-        .container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 600px; margin-top: 50px; }
-        h1 { text-align: center; color: #0056b3; margin-bottom: 20px; }
-        form { display: flex; flex-direction: column; gap: 15px; }
-        label { font-weight: bold; }
-        input[type="file"] { border: 1px solid #ddd; padding: 10px; border-radius: 4px; }
-        input[type="checkbox"] { margin-right: 10px; }
-        button { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.2s ease; }
-        button:hover { background-color: #0056b3; }
-        .response-area { margin-top: 20px; padding: 15px; border: 1px solid #eee; border-radius: 4px; background-color: #f9f9f9; }
-        .response-area h2 { color: #0056b3; margin-top: 0; font-size: 1.2em; }
-        .response-area pre { white-space: pre-wrap; word-break: break-all; }
-        .loading { text-align: center; margin-top: 20px; font-style: italic; color: #666; }
-        .error { color: red; }
-        .success { color: green; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background-color: #1a1a1a; color: #eee; }
+        .container { background-color: #2a2a2a; padding: 30px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); max-width: 800px; margin: 0 auto; }
+        .header { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; margin-bottom: 30px; }
+        .logo { max-height: 80px; transition: 0.5s ease; }
+        .logo-large { max-height: 250px; margin-bottom: 20px; }
+        h1 { color: #007bff; margin: 0; font-size: 2.5em; }
+        .step { display: none; text-align: center; }
+        .step.active { display: block; }
+        .step-left { text-align: left; }
+        .scene-item { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .btn { padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; margin-bottom: 15px; }
+        .progress-bar { height: 10px; background: #444; border-radius: 5px; margin: 20px 0; overflow: hidden; display: none; }
+        .progress-inner { height: 100%; background: #007bff; width: 0%; transition: 0.3s; }
+        .nav-links { text-align: right; margin-bottom: 20px; }
+        .nav-links a { color: #007bff; text-decoration: none; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div style="text-align: right; margin-bottom: 10px;">
-            <a href="/all-projects" style="color: #007bff; text-decoration: none; font-weight: bold;">View All Projects &rarr;</a>
+        <div class="nav-links"><a href="/all-projects">View All Projects &rarr;</a></div>
+        <div class="header">
+            <img src="/img/logo.png" alt="Pan-o-Rama Logo" class="logo" onerror="this.style.display='none'">
+            <h1>Pan-o-Rama</h1>
         </div>
-        <h1>Upload Images for New Project</h1>
-        <form id="uploadForm" enctype="multipart/form-data">
-            <label for="files">Select Images (multiple files):</label>
-            <input type="file" id="files" name="files[]" multiple accept="image/*" required>
 
-            <div>
-                <input type="checkbox" id="isPanorama" name="is_panorama">
-                <label for="isPanorama">Treat as Panorama (images will be stitched)</label>
+        <!-- Step 1: Create Project -->
+        <div id="step1" class="step active">
+            <h2>Step 1: Start New Project</h2>
+            <p>Give your virtual tour a starting point.</p>
+            <button class="btn btn-primary" onclick="createProject()">Create Project &rarr;</button>
+        </div>
+
+        <!-- Step 2: Add Scenes -->
+        <div id="step2" class="step step-left">
+            <h2>Step 2: Add Rooms / Scenes</h2>
+            <div id="scenesList"></div>
+            <hr style="border-color: #444;">
+            <h3>Add New Scene</h3>
+            <label>Room Name:</label>
+            <input type="text" id="sceneName" placeholder="e.g. Living Room">
+            <label>Images (Select multiple for panorama):</label>
+            <input type="file" id="sceneFiles" multiple accept="image/*">
+            <div style="margin-bottom: 15px;">
+                <input type="checkbox" id="isPano" checked style="width: auto;"> <label for="isPano">Stitch into Panorama</label>
             </div>
-            
-            <button type="submit">Upload and Process</button>
-        </form>
+            <button class="btn btn-success" id="addSceneBtn" onclick="addScene()">Process and Add Scene</button>
+            <div class="progress-bar" id="progressBar"><div class="progress-inner" id="progressInner"></div></div>
+            <p id="statusMsg" style="font-style: italic; color: #aaa;"></p>
+            <hr style="border-color: #444;">
+            <button class="btn btn-primary" id="finalizeBtn" style="width: 100%; display: none;" onclick="finalizeTour()">Generate Final Virtual Tour &rarr;</button>
+        </div>
 
-        <div class="loading" id="loadingMessage" style="display: none;">Processing images... Please wait.</div>
-        <div class="response-area" id="responseArea">
-            <h2>Response:</h2>
-            <pre id="responseContent"></pre>
+        <!-- Step 3: Success -->
+        <div id="step3" class="step">
+            <h2>Success!</h2>
+            <p>Your virtual tour is ready.</p>
+            <div id="finalLink"></div>
+            <br>
+            <button class="btn btn-secondary" onclick="location.reload()">Create Another</button>
         </div>
     </div>
 
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async function(event) {
-            event.preventDefault(); // Prevent default form submission
+        let currentProjectId = null;
+        let scenesCount = 0;
 
-            const form = event.target;
-            const formData = new FormData();
-            const filesInput = document.getElementById('files');
-            const isPanorama = document.getElementById('isPanorama').checked;
+        async function createProject() {
+            try {
+                const res = await fetch('/api/project/create', { method: 'POST' });
+                const data = await res.json();
+                currentProjectId = data.project_id;
+                showStep(2);
+            } catch (e) { alert("Error: " + e.message); }
+        }
 
-            if (filesInput.files.length === 0) {
-                alert('Please select at least one file.');
+        async function addScene() {
+            const name = document.getElementById('sceneName').value;
+            const files = document.getElementById('sceneFiles').files;
+            const isPano = document.getElementById('isPano').checked;
+
+            if (!name || files.length === 0) {
+                alert("Please provide a name and at least one image.");
                 return;
             }
 
-            // Append files
-            for (let i = 0; i < filesInput.files.length; i++) {
-                formData.append('files[]', filesInput.files[i]);
-            }
-            // Append panorama flag
-            formData.append('is_panorama', isPanorama ? 'true' : 'false');
+            const formData = new FormData();
+            formData.append('scene_name', name);
+            formData.append('is_panorama', isPano);
+            for (let f of files) formData.append('files[]', f);
 
-            const responseArea = document.getElementById('responseArea');
-            const responseContent = document.getElementById('responseContent');
-            const loadingMessage = document.getElementById('loadingMessage');
+            const btn = document.getElementById('addSceneBtn');
+            const progress = document.getElementById('progressBar');
+            const inner = document.getElementById('progressInner');
+            const status = document.getElementById('statusMsg');
 
-            responseContent.textContent = ''; // Clear previous response
-            responseArea.classList.remove('success', 'error');
-            loadingMessage.style.display = 'block'; // Show loading message
+            btn.disabled = true;
+            progress.style.display = 'block';
+            inner.style.width = '50%';
+            status.textContent = "Uploading and processing... This may take a minute.";
 
             try {
-                // Using /api/upload to match VPS and local setup (if handled)
-                const response = await fetch('/api/upload', {
+                const res = await fetch(`/api/project/${currentProjectId}/scene/add`, {
                     method: 'POST',
                     body: formData
                 });
-
-                const data = await response.json();
-                responseContent.textContent = JSON.stringify(data, null, 2);
-
-                if (response.ok) {
-                    responseArea.classList.add('success');
-                    if (data.gallery_url) {
-                        responseContent.innerHTML += `<p>View Gallery: <a href="${data.gallery_url}" target="_blank">Open Gallery</a></p>`;
-                    }
+                const data = await res.json();
+                
+                if (res.ok) {
+                    scenesCount++;
+                    addSceneToUI(name);
+                    document.getElementById('sceneName').value = '';
+                    document.getElementById('sceneFiles').value = '';
+                    document.getElementById('finalizeBtn').style.display = 'block';
+                    status.textContent = "Scene added successfully!";
                 } else {
-                    responseArea.classList.add('error');
+                    alert("Error: " + data.error);
                 }
-
-            } catch (error) {
-                console.error('Error:', error);
-                responseContent.textContent = 'An error occurred: ' + error.message;
-                responseArea.classList.add('error');
-            } finally {
-                loadingMessage.style.display = 'none'; // Hide loading message
+            } catch (e) { alert("Connection error: " + e.message); }
+            finally {
+                btn.disabled = false;
+                inner.style.width = '100%';
+                setTimeout(() => { progress.style.display = 'none'; inner.style.width = '0%'; }, 1000);
             }
-        });
+        }
+
+        function addSceneToUI(name) {
+            const list = document.getElementById('scenesList');
+            const div = document.createElement('div');
+            div.className = 'scene-item';
+            div.innerHTML = `<span>🏠 ${name}</span> <span style="color:#28a745">Ready</span>`;
+            list.appendChild(div);
+        }
+
+        async function finalizeTour() {
+            try {
+                const res = await fetch(`/api/project/${currentProjectId}/finalize`, { method: 'POST' });
+                const data = await res.json();
+                document.getElementById('finalLink').innerHTML = `<a href="${data.gallery_url}" target="_blank" class="btn btn-success" style="text-decoration:none; display:inline-block;">Open Virtual Tour</a>`;
+                showStep(3);
+            } catch (e) { alert("Error: " + e.message); }
+        }
+
+        function showStep(n) {
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById('step' + n).classList.add('active');
+            
+            const logo = document.querySelector('.logo');
+            if (n === 1) {
+                logo.classList.add('logo-large');
+            } else {
+                logo.classList.remove('logo-large');
+            }
+        }
+
+        // Initialize
+        showStep(1);
     </script>
 </body>
 </html>

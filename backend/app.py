@@ -7,6 +7,7 @@ import datetime
 import cv2 # Import OpenCV
 import logging
 from flask_cors import CORS
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -80,24 +81,27 @@ def projects_page():
 def list_projects():
     projects = []
     try:
-        # Scan the processed galleries folder
         if os.path.exists(app.config['PROCESSED_FOLDER']):
             for project_id in os.listdir(app.config['PROCESSED_FOLDER']):
                 project_path = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
                 if os.path.isdir(project_path):
-                    # Get folder creation time
                     ctime = os.path.getctime(project_path)
                     date_str = datetime.datetime.fromtimestamp(ctime).strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Find a preview image (prefer panorama, else first processed file)
-                    files = os.listdir(project_path)
                     preview_image = None
-                    if 'panorama.jpg' in files:
-                        preview_image = 'panorama.jpg'
-                    else:
-                        proc_files = [f for f in files if f.startswith('proc_')]
-                        if proc_files:
-                            preview_image = proc_files[0]
+                    # Try to find a preview in any scene
+                    for scene_dir in os.listdir(project_path):
+                        scene_path = os.path.join(project_path, scene_dir)
+                        if os.path.isdir(scene_path):
+                            files = os.listdir(scene_path)
+                            if 'panorama.jpg' in files:
+                                preview_image = f"{scene_dir}/panorama.jpg"
+                                break
+                            else:
+                                proc_files = [f for f in files if f.startswith('proc_')]
+                                if proc_files:
+                                    preview_image = f"{scene_dir}/{proc_files[0]}"
+                                    break
                     
                     projects.append({
                         'project_id': project_id,
@@ -107,141 +111,148 @@ def list_projects():
                         'timestamp': ctime
                     })
         
-        # Sort by timestamp descending (newest first)
         projects.sort(key=lambda x: x['timestamp'], reverse=True)
         return jsonify(projects), 200
     except Exception as e:
         app.logger.error(f"Error listing projects: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/upload', methods=['POST'])
-def upload_files():
+@app.route('/api/project/create', methods=['POST'])
+def create_project():
     try:
-        if 'files[]' not in request.files:
-            return jsonify({'error': 'No file part in the request'}), 400
-        
-        uploaded_files = request.files.getlist('files[]')
-        is_panorama = request.form.get('is_panorama') == 'true'
-        
-        if not uploaded_files or uploaded_files[0].filename == '':
-            return jsonify({'error': 'No selected file(s)'}), 400
-
         project_id = str(uuid.uuid4())
-        project_raw_dir = os.path.join(app.config['UPLOAD_FOLDER'], project_id)
         project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
-
-        os.makedirs(project_raw_dir, exist_ok=True)
         os.makedirs(project_processed_dir, exist_ok=True)
+        
+        metadata = {
+            'project_id': project_id,
+            'created_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'scenes': []
+        }
+        with open(os.path.join(project_processed_dir, 'metadata.json'), 'w') as f:
+            json.dump(metadata, f)
+            
+        return jsonify({'project_id': project_id}), 200
+    except Exception as e:
+        app.logger.error(f"Error creating project: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/project/<project_id>/scene/add', methods=['POST'])
+def add_scene(project_id):
+    try:
+        scene_name = request.form.get('scene_name', 'Unnamed Scene')
+        is_panorama = request.form.get('is_panorama') == 'true'
+        files = request.files.getlist('files[]')
+        
+        project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        metadata_path = os.path.join(project_processed_dir, 'metadata.json')
+        
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        scene_id = f"scene_{len(metadata['scenes'])}"
+        scene_raw_dir = os.path.join(app.config['UPLOAD_FOLDER'], project_id, scene_id)
+        scene_processed_dir = os.path.join(project_processed_dir, scene_id)
+        os.makedirs(scene_raw_dir, exist_ok=True)
+        os.makedirs(scene_processed_dir, exist_ok=True)
 
         saved_raw_paths = []
-        processed_files = []
-        
-        for file in uploaded_files:
+        for file in files:
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
-                raw_path = os.path.join(project_raw_dir, filename)
+                raw_path = os.path.join(scene_raw_dir, filename)
                 file.save(raw_path)
                 saved_raw_paths.append(raw_path)
 
-        # Prepare processed individual files regardless (in case stitching fails or for mix)
         processed_individual_files = []
         for raw_path in saved_raw_paths:
             filename = os.path.basename(raw_path)
             processed_filename = f"proc_{filename}"
-            processed_path = os.path.join(project_processed_dir, processed_filename)
-            if process_image(raw_path, processed_path):
-                processed_individual_files.append(processed_filename)
+            processed_path = os.path.join(scene_processed_dir, processed_filename)
+            process_image(raw_path, processed_path)
+            processed_individual_files.append(processed_filename)
 
+        panorama_filename = None
         if is_panorama and len(saved_raw_paths) >= 2:
-            panorama_filename = "panorama.jpg"
-            panorama_path = os.path.join(project_processed_dir, panorama_filename)
-            
-            # Try to stitch
+            panorama_path = os.path.join(scene_processed_dir, "panorama.jpg")
             if stitch_panorama(saved_raw_paths, panorama_path):
-                # If successful, show the panorama
-                processed_files.append(panorama_filename)
-                # We can also decide whether to keep individual files or not. 
-                # Let's keep them as "source files" in the gallery just in case.
-                processed_files.extend(processed_individual_files)
-            else:
-                # Fallback: Just show individual files if stitching fails
-                app.logger.warning("Stitching failed, falling back to individual images.")
-                processed_files = processed_individual_files
-        else:
-            # Not a panorama mode, just show images
-            processed_files = processed_individual_files
+                panorama_filename = "panorama.jpg"
 
-        gallery_url = generate_gallery(project_id, processed_files)
+        scene_data = {
+            'id': scene_id,
+            'name': scene_name,
+            'panorama': panorama_filename,
+            'images': processed_individual_files
+        }
+        metadata['scenes'].append(scene_data)
+        
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f)
 
-        return jsonify({
-            'message': 'Success',
-            'project_id': project_id,
-            'processed_files': processed_files,
-            'gallery_url': gallery_url
-        }), 200
-
+        return jsonify({'scene': scene_data}), 200
     except Exception as e:
-        app.logger.error(f"Unhandled exception: {e}", exc_info=True)
-        return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
+        app.logger.error(f"Error adding scene: {e}")
+        return jsonify({'error': str(e)}), 500
 
-def generate_gallery(project_id, image_filenames):
-    # Check if we have a panorama
-    panorama_file = next((f for f in image_filenames if f == 'panorama.jpg'), None)
-    
-    # CDN for Pannellum
-    pannellum_css = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>'
-    pannellum_js = '<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>'
-    
-    gallery_html = ""
-    
-    if panorama_file:
-        gallery_html += f"""
-        <div id="panorama" style="width: 100%; height: 600px; margin-bottom: 20px;"></div>
-        <script>
-        pannellum.viewer('panorama', {{
+@app.route('/api/project/<project_id>/finalize', methods=['POST'])
+def finalize_project(project_id):
+    try:
+        project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        metadata_path = os.path.join(project_processed_dir, 'metadata.json')
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        gallery_url = generate_tour(project_id, metadata['scenes'])
+        return jsonify({'gallery_url': gallery_url}), 200
+    except Exception as e:
+        app.logger.error(f"Error finalizing: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def generate_tour(project_id, scenes):
+    tour_config = {
+        "default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 1000, "autoLoad": True},
+        "scenes": {}
+    }
+
+    for i, scene in enumerate(scenes):
+        scene_id = scene['id']
+        panorama_url = f"{scene_id}/{scene['panorama'] if scene['panorama'] else scene['images'][0]}"
+        hotspots = []
+        if i < len(scenes) - 1:
+            hotspots.append({"pitch": 0, "yaw": 0, "type": "scene", "text": f"Next: {scenes[i+1]['name']}", "sceneId": scenes[i+1]['id']})
+        if i > 0:
+            hotspots.append({"pitch": 0, "yaw": 180, "type": "scene", "text": f"Back: {scenes[i-1]['name']}", "sceneId": scenes[i-1]['id']})
+
+        tour_config["scenes"][scene_id] = {
+            "title": scene['name'],
             "type": "equirectangular",
-            "panorama": "{panorama_file}",
-            "autoLoad": true
-        }});
-        </script>
-        <h2>Source Images</h2>
-        """
-    
-    # Add other images (excluding the panorama file itself to avoid dupes in grid)
-    other_images = [img for img in image_filenames if img != 'panorama.jpg']
-    gallery_html += '<div class="gallery-grid">' + " ".join([f'<div class="item"><img src="{name}" loading="lazy" /></div>' for name in other_images]) + '</div>'
+            "panorama": panorama_url,
+            "hotSpots": hotspots
+        }
 
+    config_json = json.dumps(tour_config, indent=4)
     html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gallery: {project_id}</title>
-    {pannellum_css if panorama_file else ''}
-    {pannellum_js if panorama_file else ''}
-    <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #1a1a1a; color: #eee; }}
-        h1 {{ color: #fff; border-bottom: 1px solid #444; padding-bottom: 10px; }}
-        h2 {{ color: #ccc; margin-top: 30px; }}
-        .gallery-grid {{ display: flex; flex-wrap: wrap; gap: 15px; }}
-        img {{ max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s; }}
-        img:hover {{ transform: scale(1.02); }}
-        .item {{ flex: 1 1 300px; max-width: 400px; }}
-    </style>
+    <title>Pan-o-Rama Tour</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <style>body {{ margin: 0; padding: 0; background: #000; }} #panorama {{ width: 100vw; height: 100vh; }}</style>
 </head>
 <body>
-    <div style="width: 100%;"><h1>Lokalny Obiektyw Project: {project_id}</h1></div>
-    {gallery_html}
+    <div id="panorama"></div>
+    <script>pannellum.viewer('panorama', {config_json});</script>
 </body>
 </html>
-    """
-    gallery_path = os.path.join(app.config['PROCESSED_FOLDER'], project_id, 'index.html')
-    with open(gallery_path, 'w', encoding='utf-8') as f:
+"""
+    with open(os.path.join(app.config['PROCESSED_FOLDER'], project_id, 'index.html'), 'w', encoding='utf-8') as f:
         f.write(html_content)
     return f'/galleries/{project_id}/index.html'
 
-@app.route('/galleries/<project_id>/<filename>')
+@app.route('/galleries/<project_id>/<path:filename>')
 def serve_gallery_files(project_id, filename):
     return send_from_directory(os.path.join(app.config['PROCESSED_FOLDER'], project_id), filename)
 
