@@ -104,8 +104,8 @@ def stitch_panorama(image_paths, output_path, is_360=True):
     app.logger.info(f"Stitching {len(image_paths)} images...")
     images = []
     total_in_w = 0
-    # Lower resolution for stitching to improve match stability with handheld captures
-    target_h = 1500
+    # Higher resolution for stitching (3000px height)
+    target_h = 3000
     app.logger.info(f"Stitch input paths: {', '.join([os.path.basename(p) for p in image_paths])}")
     for path in image_paths:
         img = cv2.imread(path)
