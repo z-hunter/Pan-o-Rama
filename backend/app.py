@@ -21,7 +21,7 @@ FRONTEND_FOLDER = os.path.join(BASE_DIR, '..', 'frontend')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 512 * 1024 * 1024 # Increased to 512 MB
+app.config['MAX_CONTENT_LENGTH'] = 512 * 1024 * 1024 
 
 # Configure logging
 logging.basicConfig(filename=os.path.join(BASE_DIR, 'flask_app.log'), level=logging.DEBUG,
@@ -65,15 +65,12 @@ def stitch_panorama(image_paths, output_path):
         app.logger.error(f"Panorama stitching failed with status {status}")
         return False
 
-@app.errorhandler(413)
-def request_entity_too_large(error):
-    return jsonify({'error': 'File too large', 'details': 'The total size of uploaded files exceeds the limit (512MB).'}), 413
-
 @app.route('/')
 def index():
     return send_from_directory(FRONTEND_FOLDER, 'index.html')
 
 @app.route('/projects')
+@app.route('/all-projects')
 def projects_page():
     return send_from_directory(FRONTEND_FOLDER, 'projects.html')
 
@@ -84,57 +81,39 @@ def list_projects():
         if os.path.exists(app.config['PROCESSED_FOLDER']):
             for project_id in os.listdir(app.config['PROCESSED_FOLDER']):
                 project_path = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
-                if os.path.isdir(project_path):
-                    ctime = os.path.getctime(project_path)
-                    date_str = datetime.datetime.fromtimestamp(ctime).strftime('%Y-%m-%d %H:%M:%S')
+                meta_path = os.path.join(project_path, 'metadata.json')
+                if os.path.isdir(project_path) and os.path.exists(meta_path):
+                    with open(meta_path, 'r') as f:
+                        meta = json.load(f)
                     
                     preview_image = None
-                    # Try to find a preview in any scene
-                    for scene_dir in os.listdir(project_path):
-                        scene_path = os.path.join(project_path, scene_dir)
-                        if os.path.isdir(scene_path):
-                            files = os.listdir(scene_path)
-                            if 'panorama.jpg' in files:
-                                preview_image = f"{scene_dir}/panorama.jpg"
-                                break
-                            else:
-                                proc_files = [f for f in files if f.startswith('proc_')]
-                                if proc_files:
-                                    preview_image = f"{scene_dir}/{proc_files[0]}"
-                                    break
+                    if meta.get('scenes'):
+                        s = meta['scenes'][0]
+                        preview_image = f"{s['id']}/{s['panorama'] if s['panorama'] else s['images'][0]}"
                     
                     projects.append({
                         'project_id': project_id,
-                        'date': date_str,
+                        'date': meta.get('created_at', 'Unknown'),
                         'preview_url': f'/galleries/{project_id}/{preview_image}' if preview_image else None,
                         'gallery_url': f'/galleries/{project_id}/index.html',
-                        'timestamp': ctime
+                        'timestamp': os.path.getctime(meta_path)
                     })
-        
         projects.sort(key=lambda x: x['timestamp'], reverse=True)
         return jsonify(projects), 200
     except Exception as e:
-        app.logger.error(f"Error listing projects: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/create', methods=['POST'])
 def create_project():
     try:
         project_id = str(uuid.uuid4())
-        project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
-        os.makedirs(project_processed_dir, exist_ok=True)
-        
-        metadata = {
-            'project_id': project_id,
-            'created_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'scenes': []
-        }
-        with open(os.path.join(project_processed_dir, 'metadata.json'), 'w') as f:
+        p_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        os.makedirs(p_dir, exist_ok=True)
+        metadata = {'project_id': project_id, 'created_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'scenes': []}
+        with open(os.path.join(p_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f)
-            
         return jsonify({'project_id': project_id}), 200
     except Exception as e:
-        app.logger.error(f"Error creating project: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/<project_id>/scene/add', methods=['POST'])
@@ -144,90 +123,91 @@ def add_scene(project_id):
         is_panorama = request.form.get('is_panorama') == 'true'
         files = request.files.getlist('files[]')
         
-        project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
-        metadata_path = os.path.join(project_processed_dir, 'metadata.json')
-        
-        with open(metadata_path, 'r') as f:
+        p_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        meta_path = os.path.join(p_dir, 'metadata.json')
+        with open(meta_path, 'r') as f:
             metadata = json.load(f)
 
         scene_id = f"scene_{len(metadata['scenes'])}"
-        scene_raw_dir = os.path.join(app.config['UPLOAD_FOLDER'], project_id, scene_id)
-        scene_processed_dir = os.path.join(project_processed_dir, scene_id)
-        os.makedirs(scene_raw_dir, exist_ok=True)
-        os.makedirs(scene_processed_dir, exist_ok=True)
+        raw_dir = os.path.join(app.config['UPLOAD_FOLDER'], project_id, scene_id)
+        proc_dir = os.path.join(p_dir, scene_id)
+        os.makedirs(raw_dir, exist_ok=True); os.makedirs(proc_dir, exist_ok=True)
 
-        saved_raw_paths = []
+        saved_raw = []
         for file in files:
             if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                raw_path = os.path.join(scene_raw_dir, filename)
-                file.save(raw_path)
-                saved_raw_paths.append(raw_path)
+                fn = secure_filename(file.filename)
+                rp = os.path.join(raw_dir, fn)
+                file.save(rp); saved_raw.append(rp)
 
-        processed_individual_files = []
-        for raw_path in saved_raw_paths:
-            filename = os.path.basename(raw_path)
-            processed_filename = f"proc_{filename}"
-            processed_path = os.path.join(scene_processed_dir, processed_filename)
-            process_image(raw_path, processed_path)
-            processed_individual_files.append(processed_filename)
+        processed = []
+        for rp in saved_raw:
+            fn = f"proc_{os.path.basename(rp)}"
+            pp = os.path.join(proc_dir, fn)
+            if process_image(rp, pp): processed.append(fn)
 
-        panorama_filename = None
-        if is_panorama and len(saved_raw_paths) >= 2:
-            panorama_path = os.path.join(scene_processed_dir, "panorama.jpg")
-            if stitch_panorama(saved_raw_paths, panorama_path):
-                panorama_filename = "panorama.jpg"
+        pano = None
+        if is_panorama and len(saved_raw) >= 2:
+            ppano = os.path.join(proc_dir, "panorama.jpg")
+            if stitch_panorama(saved_raw, ppano): pano = "panorama.jpg"
 
-        scene_data = {
-            'id': scene_id,
-            'name': scene_name,
-            'panorama': panorama_filename,
-            'images': processed_individual_files
-        }
+        scene_data = {'id': scene_id, 'name': scene_name, 'panorama': pano, 'images': processed, 'hotspots': []}
         metadata['scenes'].append(scene_data)
-        
-        with open(metadata_path, 'w') as f:
-            json.dump(metadata, f)
-
+        with open(meta_path, 'w') as f: json.dump(metadata, f)
         return jsonify({'scene': scene_data}), 200
     except Exception as e:
-        app.logger.error(f"Error adding scene: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/project/<project_id>/hotspots', methods=['POST'])
+def update_hotspots(project_id):
+    try:
+        data = request.json # Expects { scene_id: [hotspots] }
+        p_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        meta_path = os.path.join(p_dir, 'metadata.json')
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
+        
+        for scene in metadata['scenes']:
+            if scene['id'] in data:
+                scene['hotspots'] = data[scene['id']]
+        
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f)
+        
+        # Regenerate tour file
+        generate_tour(project_id, metadata['scenes'])
+        return jsonify({'message': 'Hotspots updated'}), 200
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/<project_id>/finalize', methods=['POST'])
 def finalize_project(project_id):
     try:
-        project_processed_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
-        metadata_path = os.path.join(project_processed_dir, 'metadata.json')
-        with open(metadata_path, 'r') as f:
+        p_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
+        with open(os.path.join(p_dir, 'metadata.json'), 'r') as f:
             metadata = json.load(f)
-        
-        gallery_url = generate_tour(project_id, metadata['scenes'])
-        return jsonify({'gallery_url': gallery_url}), 200
+        url = generate_tour(project_id, metadata['scenes'])
+        return jsonify({'gallery_url': url}), 200
     except Exception as e:
-        app.logger.error(f"Error finalizing: {e}")
         return jsonify({'error': str(e)}), 500
 
 def generate_tour(project_id, scenes):
     tour_config = {
-        "default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 1000, "autoLoad": True},
+        "default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 800, "autoLoad": True, "autoRotate": -2},
         "scenes": {}
     }
-
-    for i, scene in enumerate(scenes):
-        scene_id = scene['id']
-        panorama_url = f"{scene_id}/{scene['panorama'] if scene['panorama'] else scene['images'][0]}"
+    for scene in scenes:
+        panorama_url = f"{scene['id']}/{scene['panorama'] if scene['panorama'] else scene['images'][0]}"
         hotspots = []
-        if i < len(scenes) - 1:
-            hotspots.append({"pitch": 0, "yaw": 0, "type": "scene", "text": f"Next: {scenes[i+1]['name']}", "sceneId": scenes[i+1]['id']})
-        if i > 0:
-            hotspots.append({"pitch": 0, "yaw": 180, "type": "scene", "text": f"Back: {scenes[i-1]['name']}", "sceneId": scenes[i-1]['id']})
-
-        tour_config["scenes"][scene_id] = {
-            "title": scene['name'],
-            "type": "equirectangular",
-            "panorama": panorama_url,
-            "hotSpots": hotspots
+        for hs in scene.get('hotspots', []):
+            hotspots.append({
+                "pitch": hs['pitch'], "yaw": hs['yaw'], "type": "scene",
+                "text": f"Go to {hs['target_name']}", "sceneId": hs['target_id'],
+                "cssClass": "custom-hotspot"
+            })
+        tour_config["scenes"][scene['id']] = {
+            "title": scene['name'], "type": "equirectangular",
+            "panorama": panorama_url, "hotSpots": hotspots
         }
 
     config_json = json.dumps(tour_config, indent=4)
@@ -235,16 +215,26 @@ def generate_tour(project_id, scenes):
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pan-o-Rama Tour</title>
+    <meta charset="UTF-8"><title>Virtual Tour</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <style>body {{ margin: 0; padding: 0; background: #000; }} #panorama {{ width: 100vw; height: 100vh; }}</style>
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <style>
+        body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
+        #panorama {{ width: 100vw; height: 100vh; }}
+        .custom-hotspot {{ height: 50px; width: 50px; background: url('/img/logo.png'); background-size: contain; background-repeat: no-repeat; cursor: pointer; filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); transition: transform 0.2s; }}
+        .custom-hotspot:hover {{ transform: scale(1.2); }}
+    </style>
 </head>
 <body>
     <div id="panorama"></div>
-    <script>pannellum.viewer('panorama', {config_json});</script>
+    <script>
+    const viewer = pannellum.viewer('panorama', {config_json});
+    
+    // Smooth transition engine
+    viewer.on('scenechange', (sceneId) => {{
+        console.log('Moved to ' + sceneId);
+    }});
+    </script>
 </body>
 </html>
 """

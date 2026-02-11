@@ -3,168 +3,245 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pan-o-Rama - Step-by-Step Creator</title>
+    <title>Pan-o-Rama Pro - Studio</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background-color: #1a1a1a; color: #eee; }
-        .container { background-color: #2a2a2a; padding: 30px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); max-width: 800px; margin: 0 auto; }
-        .header { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; margin-bottom: 30px; }
-        .logo { max-height: 80px; transition: 0.5s ease; }
-        .logo-large { max-height: 250px; margin-bottom: 20px; }
-        h1 { color: #007bff; margin: 0; font-size: 2.5em; }
-        .step { display: none; text-align: center; }
-        .step.active { display: block; }
-        .step-left { text-align: left; }
-        .scene-item { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
-        .btn { padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #1a1a1a; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+        .app-header { background: #2a2a2a; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #444; }
+        .logo-small { height: 40px; }
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+        .viewer-container { flex: 1; position: relative; background: #000; }
+        #pano-editor { width: 100%; height: 100%; }
+        .step { display: none; }
+        .step.active { display: flex; flex-direction: column; height: 100%; }
+        .btn { padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; text-align: center; text-decoration: none; }
         .btn-primary { background: #007bff; color: white; }
         .btn-success { background: #28a745; color: white; }
-        .btn-secondary { background: #6c757d; color: white; }
-        input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; margin-bottom: 15px; }
-        .progress-bar { height: 10px; background: #444; border-radius: 5px; margin: 20px 0; overflow: hidden; display: none; }
-        .progress-inner { height: 100%; background: #007bff; width: 0%; transition: 0.3s; }
-        .nav-links { text-align: right; margin-bottom: 20px; }
-        .nav-links a { color: #007bff; text-decoration: none; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-ghost { background: transparent; border: 1px solid #555; color: #ccc; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .scene-item { background: #333; padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; cursor: pointer; border: 2px solid transparent; }
+        .scene-item.active { border-color: #007bff; background: #3d3d3d; }
+        input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; }
+        .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
+        .hud.interactive { pointer-events: auto; }
+        .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 1000; flex-direction: column; }
+        .hotspot-label { background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="nav-links"><a href="/all-projects">View All Projects &rarr;</a></div>
-        <div class="header">
-            <img src="/img/logo.png" alt="Pan-o-Rama Logo" class="logo" onerror="this.style.display='none'">
-            <h1>Pan-o-Rama</h1>
+    <div class="app-header">
+        <div style="display:flex; align-items:center; gap:15px;">
+            <img src="/img/logo.png" class="logo-small" alt="Logo">
+            <h2 style="margin:0; color:#007bff;">Pan-o-Rama Pro Studio</h2>
         </div>
+        <a href="/all-projects" class="btn btn-ghost">All Projects</a>
+    </div>
 
-        <!-- Step 1: Create Project -->
-        <div id="step1" class="step active">
-            <h2>Step 1: Start New Project</h2>
-            <p>Give your virtual tour a starting point.</p>
-            <button class="btn btn-primary" onclick="createProject()">Create Project &rarr;</button>
-        </div>
-
-        <!-- Step 2: Add Scenes -->
-        <div id="step2" class="step step-left">
-            <h2>Step 2: Add Rooms / Scenes</h2>
-            <div id="scenesList"></div>
-            <hr style="border-color: #444;">
-            <h3>Add New Scene</h3>
-            <label>Room Name:</label>
-            <input type="text" id="sceneName" placeholder="e.g. Living Room">
-            <label>Images (Select multiple for panorama):</label>
-            <input type="file" id="sceneFiles" multiple accept="image/*">
-            <div style="margin-bottom: 15px;">
-                <input type="checkbox" id="isPano" checked style="width: auto;"> <label for="isPano">Stitch into Panorama</label>
+    <div class="main-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Step 1: Init -->
+            <div id="step1" class="step active">
+                <h3>New Project</h3>
+                <p>Start a professional virtual tour.</p>
+                <button class="btn btn-primary" onclick="createProject()">Initialize Studio &rarr;</button>
             </div>
-            <button class="btn btn-success" id="addSceneBtn" onclick="addScene()">Process and Add Scene</button>
-            <div class="progress-bar" id="progressBar"><div class="progress-inner" id="progressInner"></div></div>
-            <p id="statusMsg" style="font-style: italic; color: #aaa;"></p>
-            <hr style="border-color: #444;">
-            <button class="btn btn-primary" id="finalizeBtn" style="width: 100%; display: none;" onclick="finalizeTour()">Generate Final Virtual Tour &rarr;</button>
+
+            <!-- Step 2: Scenes -->
+            <div id="step2" class="step">
+                <div style="flex:1; overflow-y:auto;">
+                    <h3>Scenes & Rooms</h3>
+                    <div id="scenesList"></div>
+                    <hr style="border-color:#444; margin:20px 0;">
+                    <h4>Add Room</h4>
+                    <input type="text" id="sceneName" placeholder="e.g. Lobby">
+                    <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
+                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Room</button>
+                </div>
+                <button class="btn btn-primary" id="gotoStep3" style="display:none;" onclick="startLinking()">Link Rooms &rarr;</button>
+            </div>
+
+            <!-- Step 3: Linking -->
+            <div id="step3" class="step">
+                <h3>Linking Lab</h3>
+                <p>Click on the panorama to place a portal.</p>
+                <div id="linkingStatus" style="font-size:0.9em; color:#aaa; margin-bottom:15px;">Selected: None</div>
+                
+                <div id="portalForm" style="display:none; background:#333; padding:15px; border-radius:8px;">
+                    <label>Leads to:</label>
+                    <select id="targetScene" style="margin-bottom:10px;"></select>
+                    <button class="btn btn-primary" style="width:100%;" onclick="savePortal()">Save Portal</button>
+                </div>
+
+                <div style="margin-top:auto;">
+                    <button class="btn btn-success" style="width:100%;" onclick="finalizeTour()">Finish & Publish</button>
+                </div>
+            </div>
         </div>
 
-        <!-- Step 3: Success -->
-        <div id="step3" class="step">
-            <h2>Success!</h2>
-            <p>Your virtual tour is ready.</p>
-            <div id="finalLink"></div>
-            <br>
-            <button class="btn btn-secondary" onclick="location.reload()">Create Another</button>
+        <!-- Viewer -->
+        <div class="viewer-container">
+            <div id="pano-editor"></div>
+            <div class="hud" id="editorHud" style="display:none;">
+                <div id="coords">Pitch: 0 | Yaw: 0</div>
+                <div style="color:#007bff; font-weight:bold; margin-top:5px;">EDITOR MODE ACTIVE</div>
+            </div>
         </div>
     </div>
 
+    <div class="loading-overlay" id="loader">
+        <div style="font-size:2em; margin-bottom:10px;">⚙️</div>
+        <div id="loaderText">Processing Assets...</div>
+    </div>
+
     <script>
-        let currentProjectId = null;
-        let scenesCount = 0;
+        let projectId = null;
+        let scenes = [];
+        let activeSceneId = null;
+        let viewer = null;
+        let lastClickCoords = null;
 
         async function createProject() {
+            setLoading(true, "Initializing...");
             try {
                 const res = await fetch('/api/project/create', { method: 'POST' });
                 const data = await res.json();
-                currentProjectId = data.project_id;
+                projectId = data.project_id;
                 showStep(2);
-            } catch (e) { alert("Error: " + e.message); }
+            } finally { setLoading(false); }
         }
 
         async function addScene() {
             const name = document.getElementById('sceneName').value;
             const files = document.getElementById('sceneFiles').files;
-            const isPano = document.getElementById('isPano').checked;
-
-            if (!name || files.length === 0) {
-                alert("Please provide a name and at least one image.");
-                return;
-            }
+            if (!name || files.length === 0) return alert("Fill all fields");
 
             const formData = new FormData();
             formData.append('scene_name', name);
-            formData.append('is_panorama', isPano);
-            for (let f of files) formData.append('files[]', f);
+            formData.append('is_panorama', 'true');
+            for(let f of files) formData.append('files[]', f);
 
-            const btn = document.getElementById('addSceneBtn');
-            const progress = document.getElementById('progressBar');
-            const inner = document.getElementById('progressInner');
-            const status = document.getElementById('statusMsg');
-
-            btn.disabled = true;
-            progress.style.display = 'block';
-            inner.style.width = '50%';
-            status.textContent = "Uploading and processing... This may take a minute.";
-
+            setLoading(true, "Stitching Panorama...");
             try {
-                const res = await fetch(`/api/project/${currentProjectId}/scene/add`, {
-                    method: 'POST',
-                    body: formData
-                });
+                const res = await fetch(`/api/project/${projectId}/scene/add`, { method: 'POST', body: formData });
                 const data = await res.json();
-                
-                if (res.ok) {
-                    scenesCount++;
-                    addSceneToUI(name);
-                    document.getElementById('sceneName').value = '';
-                    document.getElementById('sceneFiles').value = '';
-                    document.getElementById('finalizeBtn').style.display = 'block';
-                    status.textContent = "Scene added successfully!";
-                } else {
-                    alert("Error: " + data.error);
-                }
-            } catch (e) { alert("Connection error: " + e.message); }
-            finally {
-                btn.disabled = false;
-                inner.style.width = '100%';
-                setTimeout(() => { progress.style.display = 'none'; inner.style.width = '0%'; }, 1000);
-            }
+                scenes.push(data.scene);
+                updateScenesUI();
+                document.getElementById('gotoStep3').style.display = 'block';
+                document.getElementById('sceneName').value = '';
+                document.getElementById('sceneFiles').value = '';
+            } finally { setLoading(false); }
         }
 
-        function addSceneToUI(name) {
+        function updateScenesUI() {
             const list = document.getElementById('scenesList');
-            const div = document.createElement('div');
-            div.className = 'scene-item';
-            div.innerHTML = `<span>🏠 ${name}</span> <span style="color:#28a745">Ready</span>`;
-            list.appendChild(div);
+            list.innerHTML = '';
+            scenes.forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
+                div.innerHTML = `<span>🏠 ${s.name}</span>`;
+                div.onclick = () => loadScene(s.id);
+                list.appendChild(div);
+            });
+        }
+
+        function loadScene(id) {
+            activeSceneId = id;
+            updateScenesUI();
+            const scene = scenes.find(s => s.id === id);
+            const url = `/galleries/${projectId}/${id}/${scene.panorama || scene.images[0]}`;
+            
+            if (viewer) viewer.destroy();
+            
+            viewer = pannellum.viewer('pano-editor', {
+                "type": "equirectangular",
+                "panorama": url,
+                "autoLoad": true,
+                "hotSpots": scene.hotspots.map(h => ({
+                    pitch: h.pitch, yaw: h.yaw, type: "info", text: "Portal to " + h.target_name
+                }))
+            });
+
+            viewer.on('mousedown', (e) => {
+                if (document.getElementById('step3').classList.contains('active')) {
+                    const coords = viewer.mouseEventToCoords(e);
+                    lastClickCoords = coords;
+                    document.getElementById('linkingStatus').innerHTML = `<strong>Selected:</strong> Pitch: ${coords[0].toFixed(1)}, Yaw: ${coords[1].toFixed(1)}`;
+                    document.getElementById('portalForm').style.display = 'block';
+                    
+                    // Update target dropdown
+                    const select = document.getElementById('targetScene');
+                    select.innerHTML = '<option value="">Select Destination...</option>';
+                    scenes.filter(s => s.id !== activeSceneId).forEach(s => {
+                        select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+                    });
+                }
+            });
+        }
+
+        function startLinking() {
+            if (!activeSceneId && scenes.length > 0) loadScene(scenes[0].id);
+            showStep(3);
+            document.getElementById('editorHud').style.display = 'block';
+        }
+
+        function savePortal() {
+            const targetId = document.getElementById('targetScene').value;
+            if (!targetId) return;
+            
+            const targetScene = scenes.find(s => s.id === targetId);
+            const scene = scenes.find(s => s.id === activeSceneId);
+            
+            scene.hotspots.push({
+                pitch: lastClickCoords[0],
+                yaw: lastClickCoords[1],
+                target_id: targetId,
+                target_name: targetScene.name
+            });
+
+            // Update viewer
+            viewer.addHotSpot({
+                pitch: lastClickCoords[0],
+                yaw: lastClickCoords[1],
+                type: "info",
+                text: "Portal to " + targetScene.name
+            });
+
+            document.getElementById('portalForm').style.display = 'none';
+            document.getElementById('linkingStatus').textContent = 'Portal added! Click again to add more.';
         }
 
         async function finalizeTour() {
+            setLoading(true, "Finalizing Tour...");
+            // Save all hotspots
+            const hotspotData = {};
+            scenes.forEach(s => hotspotData[s.id] = s.hotspots);
+
             try {
-                const res = await fetch(`/api/project/${currentProjectId}/finalize`, { method: 'POST' });
+                await fetch(`/api/project/${projectId}/hotspots`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(hotspotData)
+                });
+
+                const res = await fetch(`/api/project/${projectId}/finalize`, { method: 'POST' });
                 const data = await res.json();
-                document.getElementById('finalLink').innerHTML = `<a href="${data.gallery_url}" target="_blank" class="btn btn-success" style="text-decoration:none; display:inline-block;">Open Virtual Tour</a>`;
-                showStep(3);
-            } catch (e) { alert("Error: " + e.message); }
+                window.open(data.gallery_url, '_blank');
+            } finally { setLoading(false); }
         }
 
         function showStep(n) {
-            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.sidebar .step').forEach(s => s.classList.remove('active'));
             document.getElementById('step' + n).classList.add('active');
-            
-            const logo = document.querySelector('.logo');
-            if (n === 1) {
-                logo.classList.add('logo-large');
-            } else {
-                logo.classList.remove('logo-large');
-            }
         }
 
-        // Initialize
-        showStep(1);
+        function setLoading(show, text = "") {
+            document.getElementById('loader').style.display = show ? 'flex' : 'none';
+            document.getElementById('loaderText').textContent = text;
+        }
     </script>
 </body>
 </html>
