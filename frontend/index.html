@@ -11,11 +11,11 @@
         .app-header { background: #2a2a2a; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #444; }
         .logo-small { height: 40px; }
         .main-container { display: flex; flex: 1; overflow: hidden; }
-        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-        .viewer-container { flex: 1; position: relative; background: #000; }
+        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100%; box-sizing: border-box; }
+        .viewer-container { flex: 1; position: relative; background: #000; height: 100%; }
         #pano-editor { width: 100%; height: 100%; }
         .step { display: none; }
-        .step.active { display: flex; flex-direction: column; height: 100%; }
+        .step.active { display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
         .btn { padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; text-align: center; text-decoration: none; }
         .btn-primary { background: #007bff; color: white; }
         .btn-success { background: #28a745; color: white; }
@@ -28,7 +28,23 @@
         .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
         .hud.interactive { pointer-events: auto; }
         .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 1000; flex-direction: column; }
-        .hotspot-label { background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        
+        /* Portal Styles (shared with viewer) */
+        .custom-hotspot { 
+            height: 30px; width: 30px; 
+            background: rgba(0, 123, 255, 0.4); 
+            border: 2px solid #fff; 
+            border-radius: 50%; 
+            cursor: pointer; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .custom-hotspot::after {
+            content: ''; width: 8px; height: 8px;
+            border-top: 3px solid #fff; border-right: 3px solid #fff;
+            transform: rotate(-45deg) translate(-1px, 1px);
+        }
+
         /* Center Logo for Step 1 */
         .center-logo-container { padding: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         .logo-giant { max-height: 400px; width: auto; filter: drop-shadow(0 0 20px rgba(0,123,255,0.2)); margin-bottom: 30px; animation: pulse 4s infinite ease-in-out; }
@@ -47,42 +63,44 @@
     <div class="main-container">
         <!-- Sidebar -->
         <div class="sidebar">
+            <div id="project-scenes" style="display:none; flex-direction: column; flex: 1; min-height: 0;">
+                <h3>Scenes & Rooms</h3>
+                <div id="scenesList" style="flex:1; overflow-y:auto; margin-bottom: 15px;"></div>
+                <hr style="border-color:#444; margin:15px 0;">
+                
+                <!-- Step 2 content: Add Room -->
+                <div id="step2" class="step">
+                    <h4>Add Room</h4>
+                    <input type="text" id="sceneName" placeholder="e.g. Lobby">
+                    <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
+                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Room</button>
+                    <button class="btn btn-primary" id="gotoStep3" style="display:none; margin-top:15px;" onclick="startLinking()">Link Rooms &rarr;</button>
+                </div>
+
+                <!-- Step 3 content: Linking -->
+                <div id="step3" class="step">
+                    <h3>Linking Lab</h3>
+                    <p>Click on the panorama to place a portal.</p>
+                    <div id="linkingStatus" style="font-size:0.9em; color:#aaa; margin-bottom:15px;">Selected: None</div>
+                    
+                    <div id="portalForm" style="display:none; background:#333; padding:15px; border-radius:8px;">
+                        <label>Leads to:</label>
+                        <select id="targetScene" style="margin-bottom:10px;"></select>
+                        <button class="btn btn-primary" style="width:100%;" onclick="savePortal()">Save Portal</button>
+                    </div>
+
+                    <div style="margin-top:auto;">
+                        <button class="btn btn-success" style="width:100%;" onclick="finalizeTour()">Finish & Publish</button>
+                        <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Rooms</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Step 1: Init -->
             <div id="step1" class="step active">
                 <h3>New Project</h3>
                 <p>Start a professional virtual tour.</p>
                 <button class="btn btn-primary" onclick="createProject()">Initialize Studio &rarr;</button>
-            </div>
-
-            <!-- Step 2: Scenes -->
-            <div id="step2" class="step">
-                <div style="flex:1; overflow-y:auto;">
-                    <h3>Scenes & Rooms</h3>
-                    <div id="scenesList"></div>
-                    <hr style="border-color:#444; margin:20px 0;">
-                    <h4>Add Room</h4>
-                    <input type="text" id="sceneName" placeholder="e.g. Lobby">
-                    <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
-                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Room</button>
-                </div>
-                <button class="btn btn-primary" id="gotoStep3" style="display:none;" onclick="startLinking()">Link Rooms &rarr;</button>
-            </div>
-
-            <!-- Step 3: Linking -->
-            <div id="step3" class="step">
-                <h3>Linking Lab</h3>
-                <p>Click on the panorama to place a portal.</p>
-                <div id="linkingStatus" style="font-size:0.9em; color:#aaa; margin-bottom:15px;">Selected: None</div>
-                
-                <div id="portalForm" style="display:none; background:#333; padding:15px; border-radius:8px;">
-                    <label>Leads to:</label>
-                    <select id="targetScene" style="margin-bottom:10px;"></select>
-                    <button class="btn btn-primary" style="width:100%;" onclick="savePortal()">Save Portal</button>
-                </div>
-
-                <div style="margin-top:auto;">
-                    <button class="btn btn-success" style="width:100%;" onclick="finalizeTour()">Finish & Publish</button>
-                </div>
             </div>
         </div>
 
@@ -144,11 +162,13 @@
                 document.getElementById('gotoStep3').style.display = 'block';
                 document.getElementById('sceneName').value = '';
                 document.getElementById('sceneFiles').value = '';
+                if (!activeSceneId) loadScene(data.scene.id);
             } finally { setLoading(false); }
         }
 
         function updateScenesUI() {
             const list = document.getElementById('scenesList');
+            if (!list) return;
             list.innerHTML = '';
             scenes.forEach(s => {
                 const div = document.createElement('div');
@@ -159,36 +179,58 @@
             });
         }
 
-        function loadScene(id) {
-            activeSceneId = id;
-            updateScenesUI();
-            
-            // Hide giant logo workspace and show editor
-            document.getElementById('step1-workspace').style.display = 'none';
-            document.getElementById('pano-editor').style.display = 'block';
-
+        function loadScene(id, targetPitch = null, targetYaw = null) {
+            console.log("Loading scene:", id);
             const scene = scenes.find(s => s.id === id);
+            if (!scene) return;
+
             const url = `/galleries/${projectId}/${id}/${scene.panorama || scene.images[0]}`;
             
-            if (viewer) viewer.destroy();
-            
-            viewer = pannellum.viewer('pano-editor', {
+            const config = {
                 "type": "equirectangular",
                 "panorama": url,
                 "autoLoad": true,
+                "sceneFadeDuration": 1000,
                 "hotSpots": scene.hotspots.map(h => ({
-                    pitch: h.pitch, yaw: h.yaw, type: "info", text: "Portal to " + h.target_name
+                    pitch: h.pitch, yaw: h.yaw, 
+                    cssClass: "custom-hotspot",
+                    createTooltipFunc: hotspotTooltip,
+                    createTooltipArgs: "Go to " + h.target_name,
+                    clickHandlerFunc: () => transitionToScene(h.target_id, h.pitch, h.yaw)
                 }))
-            });
+            };
+
+            if (viewer) {
+                // If we have a target pitch/yaw, it means we are coming from a portal
+                if (targetPitch !== null && targetYaw !== null) {
+                    const currentHfov = viewer.getHfov();
+                    viewer.setHfov(currentHfov - 40, 800);
+                    viewer.lookAt(targetPitch, targetYaw, currentHfov - 40, 800, () => {
+                        viewer.destroy();
+                        viewer = pannellum.viewer('pano-editor', config);
+                        activeSceneId = id;
+                        updateScenesUI();
+                    });
+                    return;
+                }
+                viewer.destroy();
+            }
+            
+            viewer = pannellum.viewer('pano-editor', config);
+            activeSceneId = id;
+            updateScenesUI();
+            
+            document.getElementById('step1-workspace').style.display = 'none';
+            document.getElementById('pano-editor').style.display = 'block';
 
             viewer.on('mousedown', (e) => {
                 if (document.getElementById('step3').classList.contains('active')) {
                     const coords = viewer.mouseEventToCoords(e);
                     lastClickCoords = coords;
+                    console.log("Portal target location selected:", coords);
                     document.getElementById('linkingStatus').innerHTML = `<strong>Selected:</strong> Pitch: ${coords[0].toFixed(1)}, Yaw: ${coords[1].toFixed(1)}`;
                     document.getElementById('portalForm').style.display = 'block';
                     
-                    // Update target dropdown
                     const select = document.getElementById('targetScene');
                     select.innerHTML = '<option value="">Select Destination...</option>';
                     scenes.filter(s => s.id !== activeSceneId).forEach(s => {
@@ -196,6 +238,20 @@
                     });
                 }
             });
+        }
+
+        function transitionToScene(targetId, pitch, yaw) {
+            loadScene(targetId, pitch, yaw);
+        }
+
+        function hotspotTooltip(hotSpotDiv, args) {
+            hotSpotDiv.classList.add('custom-hotspot');
+            const span = document.createElement('span');
+            span.innerHTML = args;
+            span.style.cssText = "visibility: hidden; background: rgba(0,0,0,0.8); color: #fff; border-radius: 4px; padding: 5px; position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); white-space: nowrap;";
+            hotSpotDiv.appendChild(span);
+            hotSpotDiv.onmouseover = () => span.style.visibility = 'visible';
+            hotSpotDiv.onmouseout = () => span.style.visibility = 'hidden';
         }
 
         function startLinking() {
@@ -218,12 +274,13 @@
                 target_name: targetScene.name
             });
 
-            // Update viewer
             viewer.addHotSpot({
                 pitch: lastClickCoords[0],
                 yaw: lastClickCoords[1],
-                type: "info",
-                text: "Portal to " + targetScene.name
+                cssClass: "custom-hotspot",
+                createTooltipFunc: hotspotTooltip,
+                createTooltipArgs: "Go to " + targetScene.name,
+                clickHandlerFunc: () => transitionToScene(targetId, lastClickCoords[0], lastClickCoords[1])
             });
 
             document.getElementById('portalForm').style.display = 'none';
@@ -250,8 +307,20 @@
         }
 
         function showStep(n) {
+            // Hide all steps
             document.querySelectorAll('.sidebar .step').forEach(s => s.classList.remove('active'));
-            document.getElementById('step' + n).classList.add('active');
+            
+            // Show requested step
+            const target = document.getElementById('step' + n);
+            if (target) target.classList.add('active');
+
+            // Manage project container
+            const projectScenes = document.getElementById('project-scenes');
+            if (n > 1) {
+                projectScenes.style.display = 'flex';
+            } else {
+                projectScenes.style.display = 'none';
+            }
         }
 
         function setLoading(show, text = "") {

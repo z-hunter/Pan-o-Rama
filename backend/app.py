@@ -193,7 +193,13 @@ def finalize_project(project_id):
 
 def generate_tour(project_id, scenes):
     tour_config = {
-        "default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 800, "autoLoad": True, "autoRotate": -2},
+        "default": {
+            "firstScene": scenes[0]['id'],
+            "sceneFadeDuration": 1000,
+            "autoLoad": True,
+            "autoRotate": -2,
+            "hfov": 100
+        },
         "scenes": {}
     }
     for scene in scenes:
@@ -201,9 +207,15 @@ def generate_tour(project_id, scenes):
         hotspots = []
         for hs in scene.get('hotspots', []):
             hotspots.append({
-                "pitch": hs['pitch'], "yaw": hs['yaw'], "type": "scene",
-                "text": f"Go to {hs['target_name']}", "sceneId": hs['target_id'],
-                "cssClass": "custom-hotspot"
+                "pitch": hs['pitch'], "yaw": hs['yaw'], "type": "info",
+                "text": f"Go to {hs['target_name']}",
+                "cssClass": "custom-hotspot",
+                "clickHandlerFunc": "smoothSwitch",
+                "clickHandlerArgs": {
+                    "targetSceneId": hs['target_id'],
+                    "targetPitch": hs['pitch'],
+                    "targetYaw": hs['yaw']
+                }
             })
         tour_config["scenes"][scene['id']] = {
             "title": scene['name'], "type": "equirectangular",
@@ -221,19 +233,56 @@ def generate_tour(project_id, scenes):
     <style>
         body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
         #panorama {{ width: 100vw; height: 100vh; }}
-        .custom-hotspot {{ height: 50px; width: 50px; background: url('/img/logo.png'); background-size: contain; background-repeat: no-repeat; cursor: pointer; filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); transition: transform 0.2s; }}
-        .custom-hotspot:hover {{ transform: scale(1.2); }}
+        .custom-hotspot {{ 
+            height: 50px; width: 50px; 
+            background: rgba(0, 123, 255, 0.4); 
+            border: 3px solid #fff; 
+            border-radius: 50%; 
+            cursor: pointer; 
+            box-shadow: 0 0 15px rgba(0,0,0,0.5), inset 0 0 10px rgba(255,255,255,0.5);
+            transition: all 0.3s ease;
+            display: flex; align-items: center; justify-content: center;
+        }}
+        .custom-hotspot::after {{
+            content: '';
+            width: 15px; height: 15px;
+            border-top: 5px solid #fff;
+            border-right: 5px solid #fff;
+            transform: rotate(-45deg) translate(-2px, 2px);
+        }}
+        .custom-hotspot:hover {{ 
+            background: rgba(0, 123, 255, 0.8);
+            transform: scale(1.2); 
+            box-shadow: 0 0 20px #007bff;
+        }}
     </style>
 </head>
 <body>
     <div id="panorama"></div>
     <script>
-    const viewer = pannellum.viewer('panorama', {config_json});
+    const tourConfig = {config_json};
+    const viewer = pannellum.viewer('panorama', tourConfig);
     
-    // Smooth transition engine
-    viewer.on('scenechange', (sceneId) => {{
-        console.log('Moved to ' + sceneId);
-    }});
+    function smoothSwitch(e, args) {{
+        const targetSceneId = args.targetSceneId;
+        const targetPitch = args.targetPitch;
+        const targetYaw = args.targetYaw;
+        
+        // 1. Zoom in to create "moving forward" feel
+        const currentHfov = viewer.getHfov();
+        viewer.setHfov(currentHfov - 40, 800);
+        
+        // 2. Look at the portal
+        viewer.lookAt(targetPitch, targetYaw, currentHfov - 40, 800, () => {{
+            // 3. Load the next scene
+            viewer.loadScene(targetSceneId);
+            
+            // 4. Zoom out in the new scene
+            setTimeout(() => {{
+                viewer.setHfov(currentHfov, 1200);
+            }}, 500);
+        }});
+    }}
     </script>
 </body>
 </html>
