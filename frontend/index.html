@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lokalny Obiektyw Uploader</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; color: #333; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+        .container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 600px; margin-top: 50px; }
+        h1 { text-align: center; color: #0056b3; margin-bottom: 20px; }
+        form { display: flex; flex-direction: column; gap: 15px; }
+        label { font-weight: bold; }
+        input[type="file"] { border: 1px solid #ddd; padding: 10px; border-radius: 4px; }
+        input[type="checkbox"] { margin-right: 10px; }
+        button { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.2s ease; }
+        button:hover { background-color: #0056b3; }
+        .response-area { margin-top: 20px; padding: 15px; border: 1px solid #eee; border-radius: 4px; background-color: #f9f9f9; }
+        .response-area h2 { color: #0056b3; margin-top: 0; font-size: 1.2em; }
+        .response-area pre { white-space: pre-wrap; word-break: break-all; }
+        .loading { text-align: center; margin-top: 20px; font-style: italic; color: #666; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div style="text-align: right; margin-bottom: 10px;">
+            <a href="/all-projects" style="color: #007bff; text-decoration: none; font-weight: bold;">View All Projects &rarr;</a>
+        </div>
+        <h1>Upload Images for New Project</h1>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <label for="files">Select Images (multiple files):</label>
+            <input type="file" id="files" name="files[]" multiple accept="image/*" required>
+
+            <div>
+                <input type="checkbox" id="isPanorama" name="is_panorama">
+                <label for="isPanorama">Treat as Panorama (images will be stitched)</label>
+            </div>
+            
+            <button type="submit">Upload and Process</button>
+        </form>
+
+        <div class="loading" id="loadingMessage" style="display: none;">Processing images... Please wait.</div>
+        <div class="response-area" id="responseArea">
+            <h2>Response:</h2>
+            <pre id="responseContent"></pre>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+            event.preventDefault(); // Prevent default form submission
+
+            const form = event.target;
+            const formData = new FormData();
+            const filesInput = document.getElementById('files');
+            const isPanorama = document.getElementById('isPanorama').checked;
+
+            if (filesInput.files.length === 0) {
+                alert('Please select at least one file.');
+                return;
+            }
+
+            // Append files
+            for (let i = 0; i < filesInput.files.length; i++) {
+                formData.append('files[]', filesInput.files[i]);
+            }
+            // Append panorama flag
+            formData.append('is_panorama', isPanorama ? 'true' : 'false');
+
+            const responseArea = document.getElementById('responseArea');
+            const responseContent = document.getElementById('responseContent');
+            const loadingMessage = document.getElementById('loadingMessage');
+
+            responseContent.textContent = ''; // Clear previous response
+            responseArea.classList.remove('success', 'error');
+            loadingMessage.style.display = 'block'; // Show loading message
+
+            try {
+                // Using /api/upload to match VPS and local setup (if handled)
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                responseContent.textContent = JSON.stringify(data, null, 2);
+
+                if (response.ok) {
+                    responseArea.classList.add('success');
+                    if (data.gallery_url) {
+                        responseContent.innerHTML += `<p>View Gallery: <a href="${data.gallery_url}" target="_blank">Open Gallery</a></p>`;
+                    }
+                } else {
+                    responseArea.classList.add('error');
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                responseContent.textContent = 'An error occurred: ' + error.message;
+                responseArea.classList.add('error');
+            } finally {
+                loadingMessage.style.display = 'none'; // Hide loading message
+            }
+        });
+    </script>
+</body>
+</html>

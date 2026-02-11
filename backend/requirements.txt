@@ -1,0 +1,5 @@
+Flask
+Pillow
+Werkzeug
+opencv-python
+flask-cors
