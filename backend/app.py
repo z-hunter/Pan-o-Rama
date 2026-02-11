@@ -99,7 +99,318 @@ def detect_and_crop_overlap(image_path):
     except Exception as e: app.logger.error(f"Overlap error: {e}")
     return None
 
-def stitch_panorama(image_paths, output_path, is_360=True):
+def stitch_panorama_detail(image_paths, output_path, is_360=True):
+    # Detail pipeline disabled (quality/memory issues); use basic Stitcher.
+    return False
+    """
+    Custom detail stitching pipeline (cv2.detail) to reduce frame dropping
+    for handheld 360 captures. Returns True on success.
+    """
+    if not hasattr(cv2, "detail"):
+        app.logger.warning("cv2.detail not available; skipping detail stitcher")
+        return False
+    try:
+        app.logger.info(f"Detail stitching {len(image_paths)} images...")
+        # Lower scales to reduce memory usage on VPS
+        work_megapix = 0.3
+        seam_megapix = 0.05
+        compose_megapix = 0.3
+        conf_thresh = 0.3
+
+        full_images = []
+        images = []
+        full_sizes = []
+        work_scale = None
+        seam_scale = None
+        seam_work_aspect = None
+
+        finder = cv2.ORB_create(nfeatures=2000)
+        features = []
+        app.logger.info(f"Stitch input paths: {', '.join([os.path.basename(p) for p in image_paths])}")
+
+        for path in image_paths:
+            full_img = cv2.imread(path)
+            if full_img is None:
+                app.logger.warning(f"Failed to read image: {path}")
+                continue
+            full_images.append(full_img)
+            full_sizes.append((full_img.shape[1], full_img.shape[0]))
+            if work_scale is None:
+                work_scale = min(1.0, math.sqrt((work_megapix * 1e6) / (full_img.shape[0] * full_img.shape[1])))
+                seam_scale = min(1.0, math.sqrt((seam_megapix * 1e6) / (full_img.shape[0] * full_img.shape[1])))
+                seam_work_aspect = seam_scale / work_scale
+
+            img = cv2.resize(full_img, (int(full_img.shape[1] * work_scale), int(full_img.shape[0] * work_scale)), interpolation=cv2.INTER_LINEAR)
+            images.append(img)
+            feat = cv2.detail.computeImageFeatures2(finder, img)
+            features.append(feat)
+
+        if len(images) < 2:
+            return False
+
+        # Feature matching
+        try:
+            matcher = cv2.detail_BestOf2NearestMatcher_create(False, conf_thresh)
+        except Exception:
+            matcher = cv2.detail.BestOf2NearestMatcher(False, conf_thresh)
+        matches = matcher.apply2(features)
+        matcher.collectGarbage()
+
+        # Keep only the largest connected component
+        try:
+            indices = cv2.detail.leaveBiggestComponent(features, matches, conf_thresh)
+        except Exception:
+            indices = list(range(len(images)))
+        if indices is None or len(indices) < 2:
+            app.logger.warning("Detail stitcher: not enough connected images")
+            return False
+
+        features = [features[i] for i in indices]
+        images = [images[i] for i in indices]
+        full_images = [full_images[i] for i in indices]
+        full_sizes = [full_sizes[i] for i in indices]
+
+        # Camera parameters
+        estimator = cv2.detail_HomographyBasedEstimator()
+        ok, cameras = estimator.apply(features, matches, None)
+        if not ok:
+            app.logger.warning("Detail stitcher: camera estimation failed")
+            return False
+        for cam in cameras:
+            cam.R = cam.R.astype(np.float32)
+
+        adjuster = cv2.detail_BundleAdjusterRay()
+        adjuster.setConfThresh(1.0)
+        refine_mask = np.zeros((3, 3), np.uint8)
+        refine_mask[0, 0] = 1
+        refine_mask[0, 1] = 1
+        refine_mask[0, 2] = 1
+        refine_mask[1, 1] = 1
+        refine_mask[1, 2] = 1
+        adjuster.setRefinementMask(refine_mask)
+        ok, cameras = adjuster.apply(features, matches, cameras)
+        if not ok:
+            app.logger.warning("Detail stitcher: bundle adjustment failed")
+            return False
+
+        # Wave correction
+        try:
+            cam_Rs = [cam.R for cam in cameras]
+            cv2.detail.waveCorrect(cam_Rs, cv2.detail.WAVE_CORRECT_HORIZ)
+            for i, cam in enumerate(cameras):
+                cam.R = cam_Rs[i]
+        except Exception:
+            pass
+
+        # Prefer 35mm-equivalent focal from EXIF (more stable for handheld)
+        exif_focal_35 = None
+        try:
+            with Image.open(image_paths[0]) as img_ex:
+                exif = img_ex.getexif()
+                if exif:
+                    exif_focal_35 = safe_float(exif.get(41989))
+        except Exception:
+            exif_focal_35 = None
+
+        if exif_focal_35 and full_sizes:
+            full_w = full_sizes[0][0]
+            # Focal length in pixels at full resolution, scaled to work size
+            warped_image_scale = float((full_w * exif_focal_35 / 36.0) * work_scale)
+            app.logger.info(f"Detail stitcher: using EXIF focal_35={exif_focal_35}, warped_scale={warped_image_scale:.2f}")
+        else:
+            focals = [cam.focal for cam in cameras]
+            warped_image_scale = float(np.median(focals))
+
+        # Warp images for seam estimation
+        warper = cv2.PyRotationWarper('spherical', warped_image_scale * seam_work_aspect)
+        corners = []
+        masks_warped = []
+        images_warped = []
+        sizes = []
+
+        for i, img in enumerate(images):
+            K = cameras[i].K().astype(np.float32)
+            K[0, 0] *= seam_work_aspect
+            K[1, 1] *= seam_work_aspect
+            K[0, 2] *= seam_work_aspect
+            K[1, 2] *= seam_work_aspect
+
+            corner, image_warped = warper.warp(img, K, cameras[i].R, cv2.INTER_LINEAR, cv2.BORDER_REFLECT)
+            mask = 255 * np.ones((img.shape[0], img.shape[1]), np.uint8)
+            _, mask_warped = warper.warp(mask, K, cameras[i].R, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+            corners.append(corner)
+            images_warped.append(image_warped)
+            masks_warped.append(mask_warped)
+            sizes.append((image_warped.shape[1], image_warped.shape[0]))
+
+        try:
+            seam_finder = cv2.detail_DpSeamFinder('COLOR_GRAD')
+        except Exception:
+            try:
+                seam_finder = cv2.detail.SeamFinder_createDefault(cv2.detail.SeamFinder_VORONOI_SEAM)
+            except Exception:
+                seam_finder = cv2.detail_SeamFinder_createDefault(cv2.detail.SeamFinder_VORONOI_SEAM)
+        seam_finder.find(images_warped, corners, masks_warped)
+
+        # Exposure compensation (disabled to reduce memory)
+        compensator = None
+
+        # Normalize corners to avoid negative offsets in blender
+        min_x = min([c[0] for c in corners]) if corners else 0
+        min_y = min([c[1] for c in corners]) if corners else 0
+        shift = (0, 0)
+        if min_x < 0 or min_y < 0:
+            shift = (-min_x if min_x < 0 else 0, -min_y if min_y < 0 else 0)
+            corners = [(c[0] + shift[0], c[1] + shift[1]) for c in corners]
+            app.logger.info(f"Detail stitcher: shifted corners by {shift}")
+
+        # Simple composite fallback (no multiband blending) to avoid blender issues
+        use_simple_blend = True
+        if not use_simple_blend:
+            blender = cv2.detail.Blender_createDefault(cv2.detail.Blender_MULTI_BAND, False)
+            blender.prepare(corners, sizes)
+
+        # Composition at full resolution (or compose_megapix)
+        for i, full_img in enumerate(full_images):
+            if compose_megapix > 0:
+                compose_scale = min(1.0, math.sqrt((compose_megapix * 1e6) / (full_img.shape[0] * full_img.shape[1])))
+            else:
+                compose_scale = 1.0
+            compose_work_aspect = compose_scale / work_scale
+
+            img = cv2.resize(full_img, (int(full_img.shape[1] * compose_scale), int(full_img.shape[0] * compose_scale)), interpolation=cv2.INTER_LINEAR)
+            K = cameras[i].K().astype(np.float32)
+            K[0, 0] *= compose_work_aspect
+            K[1, 1] *= compose_work_aspect
+            K[0, 2] *= compose_work_aspect
+            K[1, 2] *= compose_work_aspect
+
+            warper = cv2.PyRotationWarper('spherical', warped_image_scale * compose_work_aspect)
+            corner, image_warped = warper.warp(img, K, cameras[i].R, cv2.INTER_LINEAR, cv2.BORDER_REFLECT)
+            mask = 255 * np.ones((img.shape[0], img.shape[1]), np.uint8)
+            _, mask_warped = warper.warp(mask, K, cameras[i].R, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT)
+
+            # Apply same shift used for blender.prepare to avoid negative corners
+            corner = (corner[0] + shift[0], corner[1] + shift[1])
+            if compensator is not None:
+                compensator.apply(i, corner, image_warped, mask_warped)
+            if use_simple_blend:
+                if i == 0:
+                    simple_img = image_warped.copy()
+                    simple_mask = mask_warped.copy()
+                    simple_corner = corner
+                else:
+                    # Expand canvas if needed
+                    min_x = min(simple_corner[0], corner[0])
+                    min_y = min(simple_corner[1], corner[1])
+                    max_x = max(simple_corner[0] + simple_img.shape[1], corner[0] + image_warped.shape[1])
+                    max_y = max(simple_corner[1] + simple_img.shape[0], corner[1] + image_warped.shape[0])
+
+                    new_w = max_x - min_x
+                    new_h = max_y - min_y
+                    new_img = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+                    new_mask = np.zeros((new_h, new_w), dtype=np.uint8)
+
+                    # Paste existing
+                    sx = simple_corner[0] - min_x
+                    sy = simple_corner[1] - min_y
+                    new_img[sy:sy + simple_img.shape[0], sx:sx + simple_img.shape[1]] = simple_img
+                    new_mask[sy:sy + simple_mask.shape[0], sx:sx + simple_mask.shape[1]] = simple_mask
+
+                    # Paste new where mask is set (with feather blending)
+                    nx = corner[0] - min_x
+                    ny = corner[1] - min_y
+                    roi_img = new_img[ny:ny + image_warped.shape[0], nx:nx + image_warped.shape[1]]
+                    roi_mask = new_mask[ny:ny + mask_warped.shape[0], nx:nx + mask_warped.shape[1]]
+                    m_new = (mask_warped > 0).astype(np.uint8)
+                    m_old = (roi_mask > 0).astype(np.uint8)
+                    # Distance to mask edge for feather weights
+                    dist_new = cv2.distanceTransform(m_new, cv2.DIST_L2, 3).astype(np.float32)
+                    dist_old = cv2.distanceTransform(m_old, cv2.DIST_L2, 3).astype(np.float32)
+                    w_new = dist_new
+                    w_old = dist_old
+                    w_sum = w_new + w_old
+                    w_new = np.where(w_sum > 0, w_new / w_sum, 0)
+                    w_old = np.where(w_sum > 0, w_old / w_sum, 0)
+
+                    # Blend in overlap only on smooth areas; use seam-cut on detailed areas
+                    if roi_img.dtype != np.float32:
+                        roi_img_f = roi_img.astype(np.float32)
+                    else:
+                        roi_img_f = roi_img
+                    new_img_f = image_warped.astype(np.float32)
+
+                    overlap = (m_new > 0) & (m_old > 0)
+                    only_new = (m_new > 0) & (m_old == 0)
+
+                    if overlap.any():
+                        # Edge mask based on gradient magnitude
+                        roi_gray = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
+                        new_gray = cv2.cvtColor(image_warped, cv2.COLOR_BGR2GRAY)
+                        gx1 = cv2.Sobel(roi_gray, cv2.CV_32F, 1, 0, ksize=3)
+                        gy1 = cv2.Sobel(roi_gray, cv2.CV_32F, 0, 1, ksize=3)
+                        gx2 = cv2.Sobel(new_gray, cv2.CV_32F, 1, 0, ksize=3)
+                        gy2 = cv2.Sobel(new_gray, cv2.CV_32F, 0, 1, ksize=3)
+                        mag1 = cv2.magnitude(gx1, gy1)
+                        mag2 = cv2.magnitude(gx2, gy2)
+                        smooth = (mag1 < 12) & (mag2 < 12)
+
+                        smooth_overlap = overlap & smooth
+                        hard_overlap = overlap & (~smooth)
+
+                        if smooth_overlap.any():
+                            w_new_o = w_new[smooth_overlap][..., None]
+                            w_old_o = w_old[smooth_overlap][..., None]
+                            roi_img_f[smooth_overlap] = roi_img_f[smooth_overlap] * w_old_o + new_img_f[smooth_overlap] * w_new_o
+
+                        if hard_overlap.any():
+                            # Seam-cut: prefer pixels from new mask
+                            take_new = hard_overlap & (m_new > 0)
+                            roi_img_f[take_new] = new_img_f[take_new]
+                    if only_new.any():
+                        roi_img_f[only_new] = new_img_f[only_new]
+
+                    roi_img[:] = np.clip(roi_img_f, 0, 255).astype(np.uint8)
+                    roi_mask[m_new > 0] = 255
+
+                    simple_img = new_img
+                    simple_mask = new_mask
+                    simple_corner = (min_x, min_y)
+            else:
+                blender.feed(image_warped, mask_warped, corner)
+
+        if use_simple_blend:
+            result = simple_img
+            result_mask = simple_mask
+        else:
+            result, result_mask = blender.blend(None, None)
+            if result is None:
+                return False
+
+        # Auto-crop by largest valid mask region to remove empty zones
+        try:
+            mask = (result_mask > 0).astype(np.uint8) * 255
+            # Close small holes and connect nearby regions
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                # Take largest contour
+                cnt = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(cnt)
+                result = result[y:y + h, x:x + w]
+                app.logger.info(f"Detail stitcher: mask-cropped to {w}x{h}")
+        except Exception as e:
+            app.logger.warning(f"Mask crop failed: {e}")
+        if result.dtype != np.uint8:
+            result = np.clip(result, 0, 255).astype(np.uint8)
+        cv2.imwrite(output_path, result, [cv2.IMWRITE_JPEG_QUALITY, 100])
+        return True
+    except Exception as e:
+        app.logger.error(f"Detail stitch error: {e}", exc_info=True)
+        return False
+
+def stitch_panorama_basic(image_paths, output_path, is_360=True):
     """Robust stitching with verification."""
     app.logger.info(f"Stitching {len(image_paths)} images...")
     images = []
@@ -192,6 +503,74 @@ def stitch_panorama(image_paths, output_path, is_360=True):
         return True
     return False
 
+def stitch_panorama(image_paths, output_path, is_360=True):
+    # Use basic Stitcher for quality and stability
+    return stitch_panorama_basic(image_paths, output_path, is_360=is_360)
+
+def postprocess_panorama(image_path):
+    """
+    Remove large black gaps/borders from stitched panorama.
+    Returns (width, height, changed).
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return None, None, False
+        h, w = img.shape[:2]
+        changed = False
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        col_black = (gray < 10).mean(axis=0)
+        row_black = (gray < 10).mean(axis=1)
+
+        # Trim black borders (top/bottom/left/right)
+        top = 0
+        while top < h and row_black[top] > 0.98: top += 1
+        bottom = h - 1
+        while bottom > 0 and row_black[bottom] > 0.98: bottom -= 1
+        left = 0
+        while left < w and col_black[left] > 0.98: left += 1
+        right = w - 1
+        while right > 0 and col_black[right] > 0.98: right -= 1
+
+        if top > 0 or bottom < h - 1 or left > 0 or right < w - 1:
+            img = img[top:bottom + 1, left:right + 1]
+            changed = True
+            h, w = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            col_black = (gray < 10).mean(axis=0)
+
+        # Remove largest internal black vertical gap
+        gap_cols = col_black > 0.95
+        if gap_cols.any():
+            max_gap = 0
+            max_start = 0
+            run = 0
+            start = 0
+            for i, g in enumerate(gap_cols):
+                if g and run == 0:
+                    start = i
+                if g:
+                    run += 1
+                    if run > max_gap:
+                        max_gap = run
+                        max_start = start
+                else:
+                    run = 0
+            if max_gap > w * 0.02 and max_start > 0 and (max_start + max_gap) < w - 1:
+                left_img = img[:, :max_start]
+                right_img = img[:, max_start + max_gap:]
+                img = np.concatenate([left_img, right_img], axis=1)
+                changed = True
+                h, w = img.shape[:2]
+
+        if changed:
+            cv2.imwrite(image_path, img, [cv2.IMWRITE_JPEG_QUALITY, 100])
+        return w, h, changed
+    except Exception as e:
+        app.logger.warning(f"Postprocess panorama failed: {e}")
+        return None, None, False
+
 def process_image(input_path, output_path, max_size=(16384, 16384), quality=98):
     try:
         with Image.open(input_path) as img:
@@ -270,18 +649,19 @@ def add_scene(project_id):
             ppano = os.path.join(proc_dir, "panorama.jpg")
             if stitch_panorama([os.path.join(proc_dir, fn) for fn in processed], ppano, is_360=is_pano):
                 pano_file = "panorama.jpg"
+                pp_w, pp_h, pp_changed = postprocess_panorama(ppano) if is_pano else (None, None, False)
                 with Image.open(ppano) as img:
                     aspect = img.width / img.height
                     vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
                     if is_pano:
-                        crop_offset = detect_and_crop_overlap(ppano)
-                        if crop_offset is not None:
-                            # Refresh after crop and only then force full 360
+                        # If we did not explicitly close the loop, avoid forcing 360 to prevent black gaps
+                        crop_offset = None
+                        if crop_offset is not None or pp_changed:
+                            # If we altered the pano to remove gaps, assume full 360
                             with Image.open(ppano) as img_c:
                                 haov = 360
                                 vaov = 360 / (img_c.width / img_c.height)
                         else:
-                            # Not a full loop; avoid forcing 360 which causes wrap seams/black gaps
                             haov = vaov_c * aspect
                             vaov = vaov_c
                     else:
@@ -292,7 +672,7 @@ def add_scene(project_id):
         else:
             img_p = os.path.join(proc_dir, processed[0])
             if is_pano: 
-                crop_offset = detect_and_crop_overlap(img_p)
+                crop_offset = None
                 with Image.open(img_p) as img:
                     aspect = img.width / img.height
                     vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
