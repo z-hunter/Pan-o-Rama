@@ -99,6 +99,63 @@ def detect_and_crop_overlap(image_path):
     except Exception as e: app.logger.error(f"Overlap error: {e}")
     return None
 
+def detect_and_crop_overlap_wide(image_path, min_ratio=0.08, max_ratio=0.45):
+    """
+    Overlap detection for single wide panoramas.
+    Uses coarse SAD matching between left and right ends to find best overlap width.
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        if w < 200:
+            return None
+        # Downscale for speed
+        target_h = 400
+        scale = target_h / h
+        if scale < 1.0:
+            img_s = cv2.resize(img, (int(w * scale), target_h), interpolation=cv2.INTER_AREA)
+        else:
+            img_s = img.copy()
+        gray = cv2.cvtColor(img_s, cv2.COLOR_BGR2GRAY)
+        hs, ws = gray.shape[:2]
+
+        min_ov = int(ws * min_ratio)
+        max_ov = int(ws * max_ratio)
+        if max_ov <= min_ov + 10:
+            return None
+
+        best_ov = None
+        best_score = None
+        for ov in range(min_ov, max_ov):
+            left = gray[:, :ov]
+            right = gray[:, ws - ov:]
+            # Use correlation (higher is better)
+            l = left.astype(np.float32)
+            r = right.astype(np.float32)
+            l -= l.mean()
+            r -= r.mean()
+            denom = (np.linalg.norm(l) * np.linalg.norm(r)) + 1e-6
+            score = float((l * r).sum() / denom)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_ov = ov
+
+        # Heuristic threshold: if overlap is plausible (high correlation), trim
+        if best_ov is not None and best_score is not None and best_score > 0.25:
+            # Map overlap back to original scale
+            ov_full = int(best_ov / (ws / w))
+            if ov_full > 0 and ov_full < w:
+                new_w = w - ov_full
+                app.logger.info(f"Wide overlap detected. Trimming {ov_full}px (corr={best_score:.3f})")
+                cropped = img[:, :new_w]
+                cv2.imwrite(image_path, cropped, [cv2.IMWRITE_JPEG_QUALITY, 100])
+                return new_w
+    except Exception as e:
+        app.logger.error(f"Wide overlap error: {e}")
+    return None
+
 def stitch_panorama_detail(image_paths, output_path, is_360=True):
     # Detail pipeline disabled (quality/memory issues); use basic Stitcher.
     return False
@@ -672,13 +729,17 @@ def add_scene(project_id):
         else:
             img_p = os.path.join(proc_dir, processed[0])
             if is_pano: 
-                crop_offset = None
                 with Image.open(img_p) as img:
                     aspect = img.width / img.height
                     vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
-                    if crop_offset is not None:
-                        haov = 360
-                        vaov = 360 / aspect
+                    # If this is already a very wide pano (likely phone/360 output), force full 360
+                    if aspect >= 2.0:
+                        # Try to detect and trim overlap to avoid double content
+                        detect_and_crop_overlap_wide(img_p)
+                        with Image.open(img_p) as img_c:
+                            aspect = img_c.width / img_c.height
+                            haov = 360
+                            vaov = 360 / aspect
                     else:
                         haov = vaov_c * aspect
                         vaov = vaov_c
