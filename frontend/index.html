@@ -16,6 +16,11 @@
         #pano-editor { width: 100%; height: 100%; }
         .step { display: none; }
         .step.active { display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+        #step1-workspace.step.active {
+            display: block;
+            overflow-y: auto;
+            height: 100%;
+        }
         .btn { padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; text-align: center; text-decoration: none; }
         .btn-primary { background: #007bff; color: white; }
         .btn-success { background: #28a745; color: white; }
@@ -47,10 +52,18 @@
         .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
 
         /* Center Logo for Step 1 */
-        .center-logo-container { padding: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .logo-giant { max-height: 400px; width: auto; filter: drop-shadow(0 0 20px rgba(0,123,255,0.2)); margin-bottom: 30px; animation: pulse 4s infinite ease-in-out; }
+        .center-logo-container {
+            min-height: 100%;
+            padding: 20px 24px 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            box-sizing: border-box;
+        }
+        .logo-giant { max-height: min(42vh, 360px); width: auto; filter: drop-shadow(0 0 20px rgba(0,123,255,0.2)); margin-bottom: 12px; animation: pulse 4s infinite ease-in-out; }
         .shooting-guide {
-            margin-top: 24px;
+            margin-top: 14px;
             max-width: 760px;
             width: 100%;
             background: rgba(20, 20, 20, 0.78);
@@ -72,6 +85,80 @@
         }
         .shooting-guide li { margin-bottom: 8px; }
         .shooting-guide li:last-child { margin-bottom: 0; }
+        @media (max-width: 1024px) {
+            .sidebar { width: 270px; padding: 14px; }
+            .btn { padding: 10px; font-size: 0.95rem; }
+            .app-header { padding: 8px 12px; }
+        }
+        @media (max-width: 860px) {
+            body {
+                height: 100dvh;
+                min-height: 100dvh;
+                overflow: hidden;
+            }
+            .app-header { flex-wrap: wrap; gap: 10px; }
+            .app-header h2 { font-size: 1rem; }
+            .logo-small { height: 32px; }
+            .main-container {
+                flex: 1;
+                flex-direction: column;
+                min-height: 0;
+                height: auto;
+                overflow: visible;
+            }
+            .sidebar {
+                width: 100%;
+                max-height: 24vh;
+                border-right: 0;
+                border-bottom: 1px solid #444;
+                padding: 8px 10px;
+                gap: 8px;
+                overflow-y: auto;
+                flex-shrink: 0;
+            }
+            #step1 h3 { margin: 0 0 4px; font-size: 1rem; }
+            #step1 p { margin: 0 0 8px; font-size: 0.88rem; line-height: 1.25; }
+            #step1 .btn { padding: 9px 10px; font-size: 0.9rem; }
+            .viewer-container {
+                flex: 1;
+                min-height: 0;
+                height: auto;
+            }
+            .hud { top: 10px; right: 10px; font-size: 0.85rem; padding: 10px; }
+            .center-logo-container { padding: 16px 14px 20px; }
+            .logo-giant { max-height: min(25vh, 170px); }
+            .shooting-guide {
+                margin-top: 10px;
+                padding: 14px;
+                border-radius: 10px;
+            }
+            .shooting-guide h3 { font-size: 1rem; }
+            .shooting-guide ul { font-size: 0.9rem; line-height: 1.35; }
+        }
+        @media (max-width: 520px) {
+            .app-header > div:last-child {
+                width: 100%;
+                display: grid !important;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 8px !important;
+            }
+            .app-header > div:last-child .btn {
+                padding: 8px 6px;
+                font-size: 0.8rem;
+            }
+            .sidebar { max-height: 20vh; padding: 7px 8px; }
+            #step1 h3 { font-size: 0.95rem; margin-bottom: 3px; }
+            #step1 p { font-size: 0.82rem; margin-bottom: 6px; }
+            #step1 .btn { padding: 8px 8px; font-size: 0.84rem; }
+            .logo-giant { max-height: min(20vh, 120px); }
+            .shooting-guide { padding: 12px; }
+            .shooting-guide ul { padding-left: 18px; font-size: 0.84rem; }
+            .sidebar h3, .sidebar h4 { margin: 0 0 8px; }
+            .scene-item { padding: 8px; font-size: 0.9rem; }
+        }
+        @media (max-height: 760px) {
+            .logo-giant { max-height: min(32vh, 240px); }
+        }
         @keyframes pulse { 0% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.02); opacity: 1; } 100% { transform: scale(1); opacity: 0.9; } }
     </style>
 </head>
@@ -147,8 +234,6 @@
             <div id="step1-workspace" class="step active">
                 <div class="center-logo-container">
                     <img src="/img/logo.png" class="logo-giant" alt="Pan-o-Rama Logo large">
-                    <h1 style="font-size: 3em; color: #007bff; text-shadow: 0 0 10px rgba(0,0,0,0.5);">PAN-O-RAMA PRO</h1>
-                    <p style="font-size: 1.2em; color: #888;">The Ultimate Virtual Tour Experience</p>
                     <div class="shooting-guide">
                         <h3>How to shoot better panoramas</h3>
                         <ul>
