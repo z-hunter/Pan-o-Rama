@@ -49,6 +49,29 @@
         /* Center Logo for Step 1 */
         .center-logo-container { padding: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         .logo-giant { max-height: 400px; width: auto; filter: drop-shadow(0 0 20px rgba(0,123,255,0.2)); margin-bottom: 30px; animation: pulse 4s infinite ease-in-out; }
+        .shooting-guide {
+            margin-top: 24px;
+            max-width: 760px;
+            width: 100%;
+            background: rgba(20, 20, 20, 0.78);
+            border: 1px solid #2f2f2f;
+            border-radius: 12px;
+            padding: 18px 20px;
+            box-sizing: border-box;
+        }
+        .shooting-guide h3 {
+            margin: 0 0 10px;
+            color: #4da3ff;
+            font-size: 1.15rem;
+        }
+        .shooting-guide ul {
+            margin: 0;
+            padding-left: 20px;
+            color: #cfd5db;
+            line-height: 1.45;
+        }
+        .shooting-guide li { margin-bottom: 8px; }
+        .shooting-guide li:last-child { margin-bottom: 0; }
         @keyframes pulse { 0% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.02); opacity: 1; } 100% { transform: scale(1); opacity: 0.9; } }
     </style>
 </head>
@@ -126,6 +149,18 @@
                     <img src="/img/logo.png" class="logo-giant" alt="Pan-o-Rama Logo large">
                     <h1 style="font-size: 3em; color: #007bff; text-shadow: 0 0 10px rgba(0,0,0,0.5);">PAN-O-RAMA PRO</h1>
                     <p style="font-size: 1.2em; color: #888;">The Ultimate Virtual Tour Experience</p>
+                    <div class="shooting-guide">
+                        <h3>How to shoot better panoramas</h3>
+                        <ul>
+                            <li>Lock exposure and white balance before starting the shot sequence.</li>
+                            <li>Stand in one point and rotate the phone around itself, as if on a tripod.</li>
+                            <li>Do not walk while shooting. Even small movement breaks stitching.</li>
+                            <li>Keep overlap between frames around 30-40% so the stitcher can match details.</li>
+                            <li>Hold the horizon level and keep camera height consistent for all frames.</li>
+                            <li>Avoid moving objects close to camera (people, pets, doors) during capture.</li>
+                            <li>Use slow, steady rotation and finish a full 360° circle before stopping.</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
