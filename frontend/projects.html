@@ -32,9 +32,8 @@
     <script>
         async function fetchProjects() {
             try {
-                const response = await fetch('/gallery');
-                const data = await response.json();
-                const projects = data.items || [];
+                const response = await fetch('/api/projects');
+                const projects = await response.json();
                 
                 const grid = document.getElementById('projectGrid');
                 const loading = document.getElementById('loading');
@@ -55,7 +54,7 @@
                             <h3>${project.title || 'Untitled Tour'}</h3>
                             <p>${project.description || 'No description'}</p>
                             <p style="margin-top:8px;">Created: ${project.created_at || 'Unknown'}</p>
-                            <a href="/t/${project.slug}" class="view-link" target="_blank">Open Tour &rarr;</a>
+                            <a href="${project.gallery_url}" class="view-link" target="_blank">Open Tour &rarr;</a>
                         </div>
                     `;
                     grid.appendChild(card);

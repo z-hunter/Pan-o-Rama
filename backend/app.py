@@ -1387,21 +1387,32 @@ def all_projects_page():
 
 @app.route('/api/projects', methods=['GET'])
 def list_projects():
-    projects = []
     try:
-        if os.path.exists(app.config['PROCESSED_FOLDER']):
-            for pid in os.listdir(app.config['PROCESSED_FOLDER']):
-                p_dir = os.path.join(app.config['PROCESSED_FOLDER'], pid)
-                m_path = os.path.join(p_dir, 'metadata.json')
-                if os.path.exists(m_path):
-                    with open(m_path, 'r') as f: meta = json.load(f)
-                    preview = None
-                    if meta.get('scenes'):
-                        s = meta['scenes'][0]
-                        preview = f"{s['id']}/{s['panorama'] if s['panorama'] else s['images'][0]}"
-                    projects.append({'project_id': pid, 'date': meta.get('created_at', 'Unknown'), 'preview_url': f'/galleries/{pid}/{preview}' if preview else None, 'gallery_url': f'/galleries/{pid}/index.html', 'timestamp': os.path.getctime(m_path)})
+        db = get_db()
+        rows = db.execute(
+            """
+            SELECT id, title, description, slug, created_at
+            FROM tours
+            WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+        projects = []
+        for r in rows:
+            projects.append(
+                {
+                    "project_id": r["id"],
+                    "title": r["title"],
+                    "description": r["description"] or "",
+                    "slug": r["slug"],
+                    "created_at": r["created_at"],
+                    "gallery_url": f"/t/{r['slug']}",
+                    "preview_url": None,
+                }
+            )
         return jsonify(projects), 200
-    except Exception as e: return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/create', methods=['POST'])
 def create_project():
