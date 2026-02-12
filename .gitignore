@@ -1,8 +1,12 @@
+debug/
 venv/
 __pycache__/
 *.log
 data/raw_uploads/*
 data/processed_galleries/*
+data/app.db
+data/app.db-shm
+data/app.db-wal
 .gemini/
 backend/flask_app.log
 backend/venv/
@@ -10,3 +14,4 @@ backend/__pycache__/
 node_modules/
 .env
 .ssh/
+readme.txt

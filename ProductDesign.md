@@ -1,62 +1,75 @@
-# Pan-o-Rama Pro: Product Design Document
+# Product Design: Minimal Virtual Tour Service
 
-## 1. Vision
-Transform static 360° panoramas into an immersive, interconnected virtual environment that feels like a seamless 3D space.
+## 1. Product Goal
+Build an MVP where users can create virtual tours from panoramas, connect scenes with transitions, manage tours, and share public links.
 
-## 2. Key Challenges & Solutions
-### A. The "Blind Linking" Problem
-*   **Current:** Randomly placed buttons.
-*   **Pro Solution:** **Visual Portal Editor**. Users can rotate the camera, point at a door or path, and "drop" a portal exactly where it belongs in the 3D space.
+The service must also support private tours that:
+- are not listed in the public gallery,
+- are not accessible by direct link without authentication and permissions.
 
-### B. The "Jump Cut" Disorientation
-*   **Current:** Abrupt image swapping.
-*   **Pro Solution:** **Kinetic Transitions**. 
-    1.  On click: Move camera to align perfectly with the portal.
-    2.  Zoom-in (increase FOV) to create a sense of forward motion.
-    3.  Cross-fade to the new scene.
-    4.  New scene starts with a slight zoom-out to settle the view.
+## 2. User Roles
+- **Guest**: can browse the public gallery and open public tours.
+- **User**: can register/login, create and manage own tours.
+- **Admin**: basic moderation of users and content.
 
-### C. Latency & Loading
-*   **Current:** Load image only when needed.
-*   **Pro Solution:** **Predictive Prefetching**. Automatically load low-res versions of all connected scenes in the background as soon as the current scene is idle.
+## 3. Core Entities
+- **User**: `id`, `email`, `password_hash`, `status`, `created_at`.
+- **Tour**: `id`, `owner_id`, `title`, `description`, `visibility` (`public`/`private`), `slug`, `created_at`, `updated_at`.
+- **Scene**: `id`, `tour_id`, `title`, `panorama_url`, `order_index`.
+- **Hotspot**: `id`, `from_scene_id`, `to_scene_id`, `yaw`, `pitch`, `label`.
+- **AccessGrant**: `id`, `tour_id`, `user_id`, `role` (`viewer`/`editor`).
 
-## 3. UI/UX Design (Commercial Standard)
+## 4. MVP User Flows
+1. **Auth**
+- Register with email/password.
+- Login/logout.
+- Basic account settings (change password, profile info).
 
-### Phase 1: The Studio (Editor)
-*   **Sidebar:** List of scenes with "Edit" buttons.
-*   **Viewer Window:** The interactive panorama.
-*   **Action HUD:**
-    *   `[+] Add Portal` button.
-    *   When active: "Click on the scene to place a portal".
-*   **Portal Configuration Modal:**
-    *   Title: "Configure Portal"
-    *   Dropdown: "Destination Scene" (List of all other rooms).
-    *   Toggle: "Bidirectional Link" (Creates a return portal automatically).
-    *   Icon Picker: (Standard Arrow, Door, Information).
+2. **Tour Creation**
+- Create empty tour.
+- Upload panoramas as scenes.
+- Add transitions (hotspots) between scenes.
+- Set visibility (`public` or `private`).
 
-### Phase 2: The Experience (Viewer)
-*   **Minimalist Interface:** HUD fades out after 3 seconds of inactivity.
-*   **Floating Navigation:** Sleek, semi-transparent animated arrows that pulse slightly to invite interaction.
-*   **Compass & Map (Future):** A small radar in the corner showing orientation.
+3. **Tour Management**
+- Edit title/description/scenes/hotspots/visibility.
+- Delete tour (soft delete recommended).
 
-## 4. Technical Architecture
-### Data Structure (Metadata.json)
-```json
-{
-  "scenes": [
-    {
-      "id": "scene_0",
-      "name": "Entrance",
-      "panorama": "panorama.jpg",
-      "portals": [
-        { "pitch": -10.5, "yaw": 45.2, "target": "scene_1", "label": "Go to Office" }
-      ]
-    }
-  ]
-}
-```
+4. **Sharing**
+- Public tour: accessible via share link and visible in public gallery.
+- Private tour: hidden from gallery; link returns `403` for unauthorized users.
 
-### Transition Logic (Pseudo-code)
-1. `viewer.lookAt(portal.pitch, portal.yaw, 50, 1000)` // Aim and zoom in over 1s
-2. `viewer.loadScene(target, { yaw: portal.entryYaw })` // Swap with calculated entry angle
-3. `viewer.setHfov(100, 500)` // Settle zoom
+## 5. Required Screens
+- Landing + Public Gallery.
+- Register / Login / Forgot Password.
+- Dashboard: “My Tours”.
+- Tour Editor: scene list + panorama viewer + hotspot placement mode.
+- Tour Settings: metadata, visibility, delete.
+- Account Settings.
+
+## 6. Access & Privacy Rules
+- Only owner/editor can modify tour content.
+- Private tours are excluded from public listing and search indexing.
+- Server-side authorization required for all private tour read/write endpoints.
+
+## 7. Minimal API Surface
+- `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`
+- `GET /me`, `PATCH /me`
+- `POST /tours`, `GET /tours/my`, `GET /tours/:id`
+- `PATCH /tours/:id`, `DELETE /tours/:id`
+- `POST /tours/:id/scenes`, `PATCH /scenes/:id`, `DELETE /scenes/:id`
+- `POST /scenes/:id/hotspots`, `PATCH /hotspots/:id`, `DELETE /hotspots/:id`
+- `GET /gallery` (public tours only)
+
+## 8. Non-Functional Requirements (MVP)
+- Password hashing with Argon2/Bcrypt.
+- Auth rate limiting.
+- PostgreSQL for metadata; object storage for panoramas.
+- Centralized logs and error tracking.
+- Backup policy for DB and media.
+
+## 9. Success Metrics
+- Time-to-first-tour.
+- Percentage of users who publish at least one tour.
+- Public vs private tour usage ratio.
+- Viewer engagement: average scenes viewed per session.

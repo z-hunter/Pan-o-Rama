@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard - Pan-o-Rama</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; margin: 0; background: #f1f4f8; color: #222; }
+    .top { background: #fff; border-bottom: 1px solid #d9e2ef; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; }
+    .wrap { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #d9e2ef; border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+    .tour { background: #fff; border: 1px solid #d9e2ef; border-radius: 10px; padding: 12px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; margin-top: 6px; }
+    button { padding: 9px 12px; border: 0; border-radius: 6px; background: #007bff; color: #fff; cursor: pointer; }
+    .muted { color: #667; font-size: 13px; }
+    .row { margin-bottom: 10px; }
+    .danger { background: #c53d3d; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <strong>Pan-o-Rama Dashboard</strong>
+    <div>
+      <a href="/account">Account</a>
+      <button style="margin-left:10px" onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h3 style="margin-top:0">Create Tour</h3>
+      <div class="row"><input id="title" placeholder="Tour title" /></div>
+      <div class="row"><textarea id="description" placeholder="Description"></textarea></div>
+      <div class="row">
+        <select id="visibility">
+          <option value="private">Private (owner only)</option>
+          <option value="public">Public</option>
+        </select>
+      </div>
+      <button onclick="createTour()">Create</button>
+      <p id="createMsg" class="muted"></p>
+    </div>
+
+    <h3>My Tours</h3>
+    <div id="tours" class="grid"></div>
+  </div>
+
+<script>
+async function api(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    location.href = '/login';
+    return null;
+  }
+  return { res, data };
+}
+
+async function loadMe() {
+  const out = await api('/me');
+  if (!out) return;
+}
+
+async function loadTours() {
+  const out = await api('/tours/my');
+  if (!out) return;
+  const list = out.data.tours || [];
+  tours.innerHTML = '';
+  for (const t of list) {
+    const el = document.createElement('div');
+    el.className = 'tour';
+    el.innerHTML = `
+      <h4 style="margin:0 0 6px">${t.title}</h4>
+      <div class="muted">${t.visibility} | ${t.status}</div>
+      <div class="muted">slug: ${t.slug}</div>
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button onclick="openStudio('${t.id}')">Open Studio</button>
+        <button onclick="openShare('${t.slug}')">Open share</button>
+        <button onclick="finalize('${t.id}')">Finalize</button>
+        <button class="danger" onclick="removeTour('${t.id}')">Delete</button>
+      </div>
+    `;
+    tours.appendChild(el);
+  }
+}
+
+async function createTour() {
+  const payload = {
+    title: title.value.trim(),
+    description: description.value.trim(),
+    visibility: visibility.value
+  };
+  const out = await api('/tours', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!out) return;
+  createMsg.textContent = out.res.ok ? 'Tour created' : (out.data.error || 'Failed');
+  if (out.res.ok) {
+    title.value = '';
+    description.value = '';
+    await loadTours();
+  }
+}
+
+async function finalize(id) {
+  const out = await api(`/tours/${id}/finalize`, { method: 'POST' });
+  if (!out) return;
+  alert(out.res.ok ? `Share URL: ${out.data.share_url}` : (out.data.error || 'Finalize failed'));
+  if (out.res.ok) await loadTours();
+}
+
+function openShare(slug) {
+  window.open(`/t/${slug}`, '_blank');
+}
+
+function openStudio(id) {
+  window.location.href = `/?tour_id=${encodeURIComponent(id)}`;
+}
+
+async function removeTour(id) {
+  const out = await api(`/tours/${id}`, { method: 'DELETE' });
+  if (!out) return;
+  if (!out.res.ok) alert(out.data.error || 'Delete failed');
+  await loadTours();
+}
+
+async function logout() {
+  await api('/auth/logout', { method: 'POST' });
+  location.href = '/login';
+}
+
+loadMe();
+loadTours();
+</script>
+</body>
+</html>

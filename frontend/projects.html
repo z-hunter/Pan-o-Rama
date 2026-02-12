@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lokalny Obiektyw - Projects List</title>
+    <title>Pan-o-Rama - Browse Tours</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; color: #333; }
         .container { max-width: 1000px; margin: 0 auto; }
@@ -15,7 +15,7 @@
         .project-card:hover { transform: translateY(-5px); }
         .project-preview { width: 100%; height: 200px; object-fit: cover; background: #ddd; }
         .project-info { padding: 15px; }
-        .project-info h3 { margin: 0 0 10px; font-size: 1.1em; color: #444; word-break: break-all; }
+        .project-info h3 { margin: 0 0 10px; font-size: 1.1em; color: #444; word-break: break-word; }
         .project-info p { margin: 0; font-size: 0.9em; color: #777; }
         .view-link { display: inline-block; margin-top: 10px; color: #007bff; text-decoration: none; font-weight: bold; }
         .loading { text-align: center; font-size: 1.2em; color: #666; margin-top: 50px; }
@@ -23,48 +23,46 @@
 </head>
 <body>
     <div class="container">
-        <div class="nav"><a href="/">&larr; Back to Uploader</a></div>
-        <h1>Created Projects</h1>
-        <div id="loading" class="loading">Loading projects...</div>
+        <div class="nav"><a href="/">&larr; Back to Studio</a></div>
+        <h1>Browse Public Tours</h1>
+        <div id="loading" class="loading">Loading tours...</div>
         <div id="projectGrid" class="project-grid"></div>
     </div>
 
     <script>
         async function fetchProjects() {
             try {
-                const response = await fetch('/api/projects');
-                const projects = await response.json();
+                const response = await fetch('/gallery');
+                const data = await response.json();
+                const projects = data.items || [];
                 
                 const grid = document.getElementById('projectGrid');
                 const loading = document.getElementById('loading');
                 loading.style.display = 'none';
 
                 if (projects.length === 0) {
-                    grid.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">No projects found yet.</p>';
+                    grid.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">No public tours yet.</p>';
                     return;
                 }
 
                 projects.forEach(project => {
                     const card = document.createElement('div');
                     card.className = 'project-card';
-                    
-                    const previewHtml = project.preview_url 
-                        ? `<img src="${project.preview_url}" class="project-preview" alt="Preview">`
-                        : `<div class="project-preview" style="display:flex; align-items:center; justify-content:center; color:#999;">No Preview</div>`;
 
                     card.innerHTML = `
-                        ${previewHtml}
+                        <div class="project-preview" style="display:flex; align-items:center; justify-content:center; color:#999;">Public Tour</div>
                         <div class="project-info">
-                            <h3>Project: ${project.project_id.substring(0, 8)}...</h3>
-                            <p>Created: ${project.date}</p>
-                            <a href="${project.gallery_url}" class="view-link" target="_blank">View Gallery &rarr;</a>
+                            <h3>${project.title || 'Untitled Tour'}</h3>
+                            <p>${project.description || 'No description'}</p>
+                            <p style="margin-top:8px;">Created: ${project.created_at || 'Unknown'}</p>
+                            <a href="/t/${project.slug}" class="view-link" target="_blank">Open Tour &rarr;</a>
                         </div>
                     `;
                     grid.appendChild(card);
                 });
             } catch (error) {
-                console.error('Error fetching projects:', error);
-                document.getElementById('loading').textContent = 'Error loading projects.';
+                console.error('Error fetching tours:', error);
+                document.getElementById('loading').textContent = 'Error loading tours.';
             }
         }
 

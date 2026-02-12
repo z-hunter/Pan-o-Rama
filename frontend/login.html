@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - Pan-o-Rama</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; margin: 0; background: #111; color: #eee; }
+    .wrap { max-width: 480px; margin: 60px auto; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 24px; }
+    h1 { margin-top: 0; font-size: 22px; }
+    .row { margin-bottom: 12px; }
+    input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: #007bff; color: #fff; font-weight: 700; cursor: pointer; }
+    .alt { margin-top: 10px; background: #333; }
+    .msg { margin-top: 12px; color: #9ecbff; min-height: 18px; }
+    a { color: #89c2ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Pan-o-Rama Account</h1>
+    <div class="row"><input id="email" type="email" placeholder="Email" /></div>
+    <div class="row"><input id="password" type="password" placeholder="Password (min 8)" /></div>
+    <div class="row"><input id="displayName" type="text" placeholder="Display name (for register)" /></div>
+    <button onclick="login()">Login</button>
+    <button class="alt" onclick="register()">Register</button>
+    <p class="msg" id="msg"></p>
+    <p><a href="/">Back to editor</a></p>
+  </div>
+<script>
+async function login() {
+  await auth('/auth/login', { email: email.value.trim(), password: password.value });
+}
+async function register() {
+  await auth('/auth/register', {
+    email: email.value.trim(),
+    password: password.value,
+    display_name: displayName.value.trim()
+  });
+}
+async function auth(url, payload) {
+  msg.textContent = '';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.textContent = data.error || 'Request failed';
+    return;
+  }
+  window.location.href = '/dashboard';
+}
+</script>
+</body>
+</html>

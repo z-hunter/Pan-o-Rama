@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, g, redirect
 import os
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ExifTags, ImageOps
 import uuid
 import datetime
@@ -11,6 +12,10 @@ import json
 import math
 import numpy as np
 import re
+import sqlite3
+import hashlib
+import secrets
+import functools
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +25,8 @@ DATA_DIR = os.path.join(BASE_DIR, '..', 'data')
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'raw_uploads')
 PROCESSED_FOLDER = os.path.join(DATA_DIR, 'processed_galleries')
 FRONTEND_FOLDER = os.path.join(BASE_DIR, '..', 'frontend')
+IMG_FOLDER = os.path.join(BASE_DIR, '..', 'img')
+DB_PATH = os.path.join(DATA_DIR, 'app.db')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
@@ -144,11 +151,33 @@ def detect_and_crop_overlap_wide(image_path, min_ratio=0.08, max_ratio=0.45):
 
         # Heuristic threshold: if overlap is plausible (high correlation), trim
         if best_ov is not None and best_score is not None and best_score > 0.25:
+            # Refine cut position to avoid slicing through strong edges
+            cut_center = ws - best_ov
+            # Precompute gradient magnitude
+            gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag = cv2.magnitude(gx, gy)
+            window = int(ws * 0.02)  # search +/-2% width
+            band = 6  # pixels around seam
+            best_cut = cut_center
+            best_edge = None
+            for dx in range(-window, window + 1, 1):
+                x = cut_center + dx
+                if x - band < 0 or x + band >= ws:
+                    continue
+                seam_band = mag[:, x - band:x + band]
+                edge = float(np.mean(seam_band))
+                if best_edge is None or edge < best_edge:
+                    best_edge = edge
+                    best_cut = x
+
+            # Convert cut position back to overlap width
+            best_ov = ws - best_cut
             # Map overlap back to original scale
             ov_full = int(best_ov / (ws / w))
             if ov_full > 0 and ov_full < w:
                 new_w = w - ov_full
-                app.logger.info(f"Wide overlap detected. Trimming {ov_full}px (corr={best_score:.3f})")
+                app.logger.info(f"Wide overlap detected. Trimming {ov_full}px (corr={best_score:.3f}, edge={best_edge:.2f})")
                 cropped = img[:, :new_w]
                 cv2.imwrite(image_path, cropped, [cv2.IMWRITE_JPEG_QUALITY, 100])
                 return new_w
@@ -638,8 +667,723 @@ def process_image(input_path, output_path, max_size=(16384, 16384), quality=98):
             return True
     except: return False
 
+def now_iso():
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+@app.teardown_appcontext
+def close_db(_error):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    db = sqlite3.connect(DB_PATH)
+    try:
+        db.executescript(
+            """
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                user_agent TEXT,
+                ip TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS tours (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                slug TEXT NOT NULL UNIQUE,
+                visibility TEXT NOT NULL CHECK(visibility IN ('public','private')),
+                status TEXT NOT NULL DEFAULT 'draft',
+                deleted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS scenes (
+                id TEXT PRIMARY KEY,
+                tour_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                panorama_path TEXT,
+                images_json TEXT NOT NULL DEFAULT '[]',
+                order_index INTEGER NOT NULL,
+                haov REAL NOT NULL DEFAULT 360,
+                vaov REAL NOT NULL DEFAULT 180,
+                scene_type TEXT NOT NULL DEFAULT 'equirectangular',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS hotspots (
+                id TEXT PRIMARY KEY,
+                tour_id TEXT NOT NULL,
+                from_scene_id TEXT NOT NULL,
+                to_scene_id TEXT NOT NULL,
+                yaw REAL NOT NULL,
+                pitch REAL NOT NULL,
+                entry_yaw REAL,
+                entry_pitch REAL,
+                label TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
+                FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+                FOREIGN KEY (to_scene_id) REFERENCES scenes(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
+            CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
+            CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
+            CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
+            """
+        )
+        cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
+        if "entry_yaw" not in cols:
+            db.execute("ALTER TABLE hotspots ADD COLUMN entry_yaw REAL")
+        if "entry_pitch" not in cols:
+            db.execute("ALTER TABLE hotspots ADD COLUMN entry_pitch REAL")
+        db.commit()
+    finally:
+        db.close()
+
+def hash_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def get_current_user():
+    token = request.cookies.get("session_token")
+    if not token:
+        return None
+    db = get_db()
+    token_h = hash_token(token)
+    row = db.execute(
+        """
+        SELECT u.*
+        FROM sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active'
+        """,
+        (token_h, now_iso()),
+    ).fetchone()
+    return row
+
+@app.before_request
+def attach_current_user():
+    g.current_user = get_current_user()
+
+def require_auth(view_fn):
+    @functools.wraps(view_fn)
+    def wrapper(*args, **kwargs):
+        if g.current_user is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        return view_fn(*args, **kwargs)
+    return wrapper
+
+def normalize_visibility(val):
+    return "public" if val == "public" else "private"
+
+def slugify(title):
+    base = re.sub(r"[^a-zA-Z0-9]+", "-", (title or "").strip().lower()).strip("-")
+    if not base:
+        base = "tour"
+    return f"{base}-{secrets.token_hex(3)}"
+
+def serialize_tour(row):
+    return {
+        "id": row["id"],
+        "owner_id": row["owner_id"],
+        "title": row["title"],
+        "description": row["description"],
+        "slug": row["slug"],
+        "visibility": row["visibility"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+def serialize_scene(row):
+    return {
+        "id": row["id"],
+        "tour_id": row["tour_id"],
+        "name": row["title"],
+        "panorama": row["panorama_path"],
+        "images": json.loads(row["images_json"] or "[]"),
+        "haov": row["haov"],
+        "vaov": row["vaov"],
+        "type": row["scene_type"],
+        "order_index": row["order_index"],
+    }
+
+def fetch_tour_with_access(tour_id, require_owner=False):
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM tours WHERE id = ? AND deleted_at IS NULL",
+        (tour_id,),
+    ).fetchone()
+    if row is None:
+        return None, (jsonify({"error": "Tour not found"}), 404)
+
+    user = g.current_user
+    is_owner = user is not None and user["id"] == row["owner_id"]
+    if require_owner and not is_owner:
+        return None, (jsonify({"error": "Forbidden"}), 403)
+    if row["visibility"] == "private" and not is_owner:
+        return None, (jsonify({"error": "Forbidden"}), 403)
+    return row, None
+
+def create_session_response(user_row):
+    db = get_db()
+    session_token = secrets.token_urlsafe(48)
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).replace(microsecond=0).isoformat() + "Z"
+    db.execute(
+        """
+        INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            user_row["id"],
+            hash_token(session_token),
+            expires,
+            now_iso(),
+            request.headers.get("User-Agent", ""),
+            request.remote_addr or "",
+        ),
+    )
+    db.commit()
+    payload = {"id": user_row["id"], "email": user_row["email"], "display_name": user_row["display_name"]}
+    resp = jsonify({"user": payload})
+    max_age = 7 * 24 * 3600
+    resp.set_cookie("session_token", session_token, httponly=True, samesite="Lax", secure=False, max_age=max_age)
+    return resp
+
+def load_tour_scenes_and_hotspots(tour_id):
+    db = get_db()
+    scene_rows = db.execute(
+        "SELECT * FROM scenes WHERE tour_id = ? ORDER BY order_index ASC",
+        (tour_id,),
+    ).fetchall()
+    scene_ids = [r["id"] for r in scene_rows]
+    hotspot_rows = []
+    if scene_ids:
+        ph = ",".join("?" for _ in scene_ids)
+        hotspot_rows = db.execute(
+            f"SELECT * FROM hotspots WHERE from_scene_id IN ({ph}) ORDER BY created_at ASC",
+            scene_ids,
+        ).fetchall()
+    scene_name = {r["id"]: r["title"] for r in scene_rows}
+    grouped = {}
+    for h in hotspot_rows:
+        grouped.setdefault(h["from_scene_id"], []).append(
+            {
+                "pitch": h["pitch"],
+                "yaw": h["yaw"],
+                "entry_pitch": h["entry_pitch"] if h["entry_pitch"] is not None else 0.0,
+                "entry_yaw": h["entry_yaw"] if h["entry_yaw"] is not None else 0.0,
+                "target_id": h["to_scene_id"],
+                "target_name": scene_name.get(h["to_scene_id"], "Scene"),
+                "label": h["label"] or "",
+            }
+        )
+    scenes = []
+    for r in scene_rows:
+        s = serialize_scene(r)
+        s["hotspots"] = grouped.get(r["id"], [])
+        scenes.append(s)
+    return scenes
+
+@app.route("/auth/register", methods=["POST"])
+def auth_register():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    display_name = (data.get("display_name") or email.split("@")[0] or "User").strip()
+    if "@" not in email or len(password) < 8:
+        return jsonify({"error": "Invalid email or password (min 8 chars)"}), 400
+    db = get_db()
+    exists = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if exists:
+        return jsonify({"error": "Email already exists"}), 409
+    uid = str(uuid.uuid4())
+    ts = now_iso()
+    db.execute(
+        "INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (uid, email, generate_password_hash(password), display_name or "User", ts, ts),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    return create_session_response(row), 201
+
+@app.route("/auth/login", methods=["POST"])
+def auth_login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    db = get_db()
+    row = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    if row is None or not check_password_hash(row["password_hash"], password):
+        return jsonify({"error": "Invalid credentials"}), 401
+    return create_session_response(row), 200
+
+@app.route("/auth/logout", methods=["POST"])
+def auth_logout():
+    token = request.cookies.get("session_token")
+    if token:
+        db = get_db()
+        db.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_token(token),))
+        db.commit()
+    resp = jsonify({"message": "Logged out"})
+    resp.delete_cookie("session_token")
+    return resp, 200
+
+@app.route("/me", methods=["GET"])
+@require_auth
+def me_get():
+    u = g.current_user
+    return jsonify({"id": u["id"], "email": u["email"], "display_name": u["display_name"]}), 200
+
+@app.route("/me", methods=["PATCH"])
+@require_auth
+def me_patch():
+    data = request.get_json(silent=True) or {}
+    display_name = (data.get("display_name") or "").strip()
+    if not display_name:
+        return jsonify({"error": "display_name is required"}), 400
+    db = get_db()
+    db.execute("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?", (display_name, now_iso(), g.current_user["id"]))
+    db.commit()
+    return jsonify({"message": "Profile updated"}), 200
+
+@app.route("/me/password", methods=["PATCH"])
+@require_auth
+def me_password():
+    data = request.get_json(silent=True) or {}
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+    if len(new_password) < 8:
+        return jsonify({"error": "new_password must be at least 8 characters"}), 400
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (g.current_user["id"],)).fetchone()
+    if not check_password_hash(user["password_hash"], current_password):
+        return jsonify({"error": "Current password is incorrect"}), 401
+    db.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (generate_password_hash(new_password), now_iso(), user["id"]))
+    db.commit()
+    return jsonify({"message": "Password updated"}), 200
+
+@app.route("/tours", methods=["POST"])
+@require_auth
+def tours_create():
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip() or "Untitled Tour"
+    description = (data.get("description") or "").strip()
+    visibility = normalize_visibility(data.get("visibility"))
+    tid = str(uuid.uuid4())
+    ts = now_iso()
+    slug = slugify(title)
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO tours (id, owner_id, title, description, slug, visibility, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        """,
+        (tid, g.current_user["id"], title, description, slug, visibility, ts, ts),
+    )
+    db.commit()
+    os.makedirs(os.path.join(app.config["PROCESSED_FOLDER"], tid), exist_ok=True)
+    row = db.execute("SELECT * FROM tours WHERE id = ?", (tid,)).fetchone()
+    return jsonify({"tour": serialize_tour(row)}), 201
+
+@app.route("/tours/my", methods=["GET"])
+@require_auth
+def tours_my():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM tours WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+        (g.current_user["id"],),
+    ).fetchall()
+    return jsonify({"tours": [serialize_tour(r) for r in rows]}), 200
+
+@app.route("/tours/<tour_id>", methods=["GET"])
+def tours_get(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=False)
+    if err:
+        return err
+    scenes = load_tour_scenes_and_hotspots(tour["id"])
+    payload = serialize_tour(tour)
+    payload["scenes"] = scenes
+    return jsonify({"tour": payload}), 200
+
+@app.route("/tours/<tour_id>", methods=["PATCH"])
+@require_auth
+def tours_patch(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or tour["title"]).strip() or tour["title"]
+    description = (data.get("description") or tour["description"]).strip()
+    visibility = normalize_visibility(data.get("visibility") or tour["visibility"])
+    db = get_db()
+    db.execute(
+        "UPDATE tours SET title = ?, description = ?, visibility = ?, updated_at = ? WHERE id = ?",
+        (title, description, visibility, now_iso(), tour["id"]),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM tours WHERE id = ?", (tour["id"],)).fetchone()
+    return jsonify({"tour": serialize_tour(row)}), 200
+
+@app.route("/tours/<tour_id>", methods=["DELETE"])
+@require_auth
+def tours_delete(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    db = get_db()
+    db.execute("UPDATE tours SET deleted_at = ?, updated_at = ? WHERE id = ?", (now_iso(), now_iso(), tour["id"]))
+    db.commit()
+    return jsonify({"message": "Tour deleted"}), 200
+
+@app.route("/tours/<tour_id>/scenes", methods=["POST"])
+@require_auth
+def tours_add_scene(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    name = request.form.get("scene_name", "Unnamed")
+    is_pano = request.form.get("is_panorama") == "true"
+    files = request.files.getlist("files[]")
+    if not files:
+        return jsonify({"error": "No files[] uploaded"}), 400
+    db = get_db()
+    count_row = db.execute("SELECT COUNT(*) AS c FROM scenes WHERE tour_id = ?", (tour["id"],)).fetchone()
+    order_index = int(count_row["c"])
+    sid = f"scene_{order_index}"
+    raw_dir = os.path.join(app.config["UPLOAD_FOLDER"], tour["id"], sid)
+    proc_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour["id"], sid)
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(proc_dir, exist_ok=True)
+    files.sort(key=lambda x: natural_sort_key(x.filename))
+    saved_raw, processed = [], []
+    for file in files:
+        if file and ('.' in file.filename and file.filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS):
+            fn = secure_filename(file.filename)
+            rp = os.path.join(raw_dir, fn)
+            file.save(rp)
+            saved_raw.append(rp)
+    for rp in saved_raw:
+        fn = f"proc_{os.path.basename(rp)}"
+        pp = os.path.join(proc_dir, fn)
+        if process_image(rp, pp):
+            processed.append(fn)
+    if not processed:
+        return jsonify({"error": "No valid images"}), 400
+
+    focal_35 = 26.0
+    try:
+        with Image.open(saved_raw[0]) as img:
+            exif = img.getexif()
+            if exif:
+                f = safe_float(exif.get(41989)) or (safe_float(exif.get(37386)) * 6.0)
+                if f > 0:
+                    focal_35 = f
+    except Exception:
+        pass
+
+    pano_file = None
+    haov, vaov = 100, 60
+    if len(processed) >= 2:
+        ppano = os.path.join(proc_dir, "panorama.jpg")
+        if stitch_panorama([os.path.join(proc_dir, fn) for fn in processed], ppano, is_360=is_pano):
+            pano_file = "panorama.jpg"
+            _pp_w, _pp_h, pp_changed = postprocess_panorama(ppano) if is_pano else (None, None, False)
+            with Image.open(ppano) as img:
+                aspect = img.width / img.height
+                vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
+                if is_pano:
+                    haov = 360 if pp_changed else vaov_c * aspect
+                    vaov = (360 / aspect) if pp_changed else vaov_c
+                else:
+                    haov = vaov_c * aspect
+                    vaov = vaov_c
+        else:
+            haov = 2 * math.degrees(math.atan(18.0 / focal_35))
+            vaov = haov / (16 / 9)
+    else:
+        img_p = os.path.join(proc_dir, processed[0])
+        with Image.open(img_p) as img:
+            aspect = img.width / img.height
+            vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
+            if is_pano and aspect >= 2.0:
+                detect_and_crop_overlap_wide(img_p)
+                with Image.open(img_p) as img_c:
+                    aspect = img_c.width / img_c.height
+                    haov = 360
+                    vaov = 360 / aspect
+            else:
+                haov = vaov_c * aspect
+                vaov = vaov_c
+
+    ts = now_iso()
+    db.execute(
+        """
+        INSERT INTO scenes (id, tour_id, title, panorama_path, images_json, order_index, haov, vaov, scene_type, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'equirectangular', ?, ?)
+        """,
+        (sid, tour["id"], name, pano_file, json.dumps(processed), order_index, round(haov, 2), round(vaov, 2), ts, ts),
+    )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
+    db.commit()
+    row = db.execute("SELECT * FROM scenes WHERE id = ? AND tour_id = ?", (sid, tour["id"])).fetchone()
+    scene_payload = serialize_scene(row)
+    scene_payload["hotspots"] = []
+    return jsonify({"scene": scene_payload}), 201
+
+@app.route("/scenes/<scene_id>", methods=["PATCH"])
+@require_auth
+def scenes_patch(scene_id):
+    db = get_db()
+    row = db.execute("SELECT s.*, t.owner_id FROM scenes s JOIN tours t ON t.id = s.tour_id WHERE s.id = ? AND t.deleted_at IS NULL", (scene_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "Scene not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    title = (data.get("name") or row["title"]).strip() or row["title"]
+    db.execute("UPDATE scenes SET title = ?, updated_at = ? WHERE id = ?", (title, now_iso(), scene_id))
+    db.commit()
+    return jsonify({"message": "Scene updated"}), 200
+
+@app.route("/scenes/<scene_id>", methods=["DELETE"])
+@require_auth
+def scenes_delete(scene_id):
+    db = get_db()
+    row = db.execute("SELECT s.*, t.owner_id FROM scenes s JOIN tours t ON t.id = s.tour_id WHERE s.id = ? AND t.deleted_at IS NULL", (scene_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "Scene not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+    db.execute("DELETE FROM hotspots WHERE from_scene_id = ? OR to_scene_id = ?", (scene_id, scene_id))
+    db.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (now_iso(), row["tour_id"]))
+    db.commit()
+    return jsonify({"message": "Scene deleted"}), 200
+
+@app.route("/scenes/<scene_id>/hotspots", methods=["POST"])
+@require_auth
+def hotspots_create(scene_id):
+    db = get_db()
+    source = db.execute("SELECT s.*, t.owner_id FROM scenes s JOIN tours t ON t.id = s.tour_id WHERE s.id = ? AND t.deleted_at IS NULL", (scene_id,)).fetchone()
+    if source is None:
+        return jsonify({"error": "Scene not found"}), 404
+    if source["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    to_scene_id = data.get("to_scene_id")
+    yaw = data.get("yaw")
+    pitch = data.get("pitch")
+    entry_yaw = data.get("entry_yaw", 0.0)
+    entry_pitch = data.get("entry_pitch", 0.0)
+    label = (data.get("label") or "").strip()
+    target = db.execute("SELECT id FROM scenes WHERE id = ? AND tour_id = ?", (to_scene_id, source["tour_id"])).fetchone()
+    if target is None:
+        return jsonify({"error": "Target scene not found in same tour"}), 400
+    try:
+        yaw = float(yaw)
+        pitch = float(pitch)
+        entry_yaw = float(entry_yaw)
+        entry_pitch = float(entry_pitch)
+    except Exception:
+        return jsonify({"error": "yaw, pitch, entry_yaw, entry_pitch must be numbers"}), 400
+    hid = str(uuid.uuid4())
+    ts = now_iso()
+    db.execute(
+        """
+        INSERT INTO hotspots (id, tour_id, from_scene_id, to_scene_id, yaw, pitch, entry_yaw, entry_pitch, label, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (hid, source["tour_id"], scene_id, to_scene_id, yaw, pitch, entry_yaw, entry_pitch, label, ts, ts),
+    )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, source["tour_id"]))
+    db.commit()
+    return jsonify({"hotspot": {"id": hid, "from_scene_id": scene_id, "to_scene_id": to_scene_id, "yaw": yaw, "pitch": pitch, "entry_yaw": entry_yaw, "entry_pitch": entry_pitch, "label": label}}), 201
+
+@app.route("/hotspots/<hotspot_id>", methods=["PATCH"])
+@require_auth
+def hotspots_patch(hotspot_id):
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT h.*, t.owner_id
+        FROM hotspots h
+        JOIN tours t ON t.id = h.tour_id
+        WHERE h.id = ? AND t.deleted_at IS NULL
+        """,
+        (hotspot_id,),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "Hotspot not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    yaw = float(data.get("yaw", row["yaw"]))
+    pitch = float(data.get("pitch", row["pitch"]))
+    entry_yaw = float(data.get("entry_yaw", row["entry_yaw"] if row["entry_yaw"] is not None else 0.0))
+    entry_pitch = float(data.get("entry_pitch", row["entry_pitch"] if row["entry_pitch"] is not None else 0.0))
+    label = (data.get("label") or row["label"] or "").strip()
+    db.execute(
+        "UPDATE hotspots SET yaw = ?, pitch = ?, entry_yaw = ?, entry_pitch = ?, label = ?, updated_at = ? WHERE id = ?",
+        (yaw, pitch, entry_yaw, entry_pitch, label, now_iso(), hotspot_id),
+    )
+    db.commit()
+    return jsonify({"message": "Hotspot updated"}), 200
+
+@app.route("/hotspots/<hotspot_id>", methods=["DELETE"])
+@require_auth
+def hotspots_delete(hotspot_id):
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT h.id, t.owner_id
+        FROM hotspots h
+        JOIN tours t ON t.id = h.tour_id
+        WHERE h.id = ? AND t.deleted_at IS NULL
+        """,
+        (hotspot_id,),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "Hotspot not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+    db.execute("DELETE FROM hotspots WHERE id = ?", (hotspot_id,))
+    db.commit()
+    return jsonify({"message": "Hotspot deleted"}), 200
+
+@app.route("/tours/<tour_id>/finalize", methods=["POST"])
+@require_auth
+def tours_finalize(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    scenes = load_tour_scenes_and_hotspots(tour["id"])
+    if not scenes:
+        return jsonify({"error": "Tour must have at least one scene"}), 400
+    gallery_url = generate_tour(tour["id"], scenes)
+    db = get_db()
+    db.execute("UPDATE tours SET status = 'published', updated_at = ? WHERE id = ?", (now_iso(), tour["id"]))
+    db.commit()
+    share_url = f"/t/{tour['slug']}"
+    return jsonify({"gallery_url": gallery_url, "share_url": share_url, "visibility": tour["visibility"]}), 200
+
+@app.route("/tours/<tour_id>/hotspots/bulk", methods=["POST"])
+@require_auth
+def tours_hotspots_bulk(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    scenes_map = data if isinstance(data, dict) else {}
+    db = get_db()
+    scene_rows = db.execute("SELECT id, title FROM scenes WHERE tour_id = ?", (tour["id"],)).fetchall()
+    valid_scene_ids = {r["id"] for r in scene_rows}
+    scene_names = {r["id"]: r["title"] for r in scene_rows}
+
+    db.execute("DELETE FROM hotspots WHERE tour_id = ?", (tour["id"],))
+    ts = now_iso()
+    for from_scene_id, items in scenes_map.items():
+        if from_scene_id not in valid_scene_ids or not isinstance(items, list):
+            continue
+        for hs in items:
+            to_scene_id = hs.get("target_id")
+            if to_scene_id not in valid_scene_ids:
+                continue
+            try:
+                yaw = float(hs.get("yaw"))
+                pitch = float(hs.get("pitch"))
+                entry_yaw = float(hs.get("entry_yaw", 0.0))
+                entry_pitch = float(hs.get("entry_pitch", 0.0))
+            except Exception:
+                continue
+            label = (hs.get("label") or f"Go to {scene_names.get(to_scene_id, 'Scene')}").strip()
+            db.execute(
+                """
+                INSERT INTO hotspots (id, tour_id, from_scene_id, to_scene_id, yaw, pitch, entry_yaw, entry_pitch, label, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), tour["id"], from_scene_id, to_scene_id, yaw, pitch, entry_yaw, entry_pitch, label, ts, ts),
+            )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
+    db.commit()
+    return jsonify({"message": "Hotspots replaced"}), 200
+
+@app.route("/gallery", methods=["GET"])
+def public_gallery():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, slug, title, description, created_at
+        FROM tours
+        WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    return jsonify({"items": [dict(r) for r in rows]}), 200
+
+@app.route("/t/<slug>", methods=["GET"])
+def open_share_link(slug):
+    db = get_db()
+    tour = db.execute(
+        "SELECT * FROM tours WHERE slug = ? AND deleted_at IS NULL",
+        (slug,),
+    ).fetchone()
+    if tour is None:
+        return jsonify({"error": "Tour not found"}), 404
+    is_owner = g.current_user is not None and g.current_user["id"] == tour["owner_id"]
+    if tour["visibility"] == "private" and not is_owner:
+        return jsonify({"error": "Forbidden"}), 403
+    return redirect(f"/galleries/{tour['id']}/index.html", code=302)
+
 @app.route('/')
 def index(): return send_from_directory(FRONTEND_FOLDER, 'index.html')
+
+@app.route('/login')
+def login_page():
+    return send_from_directory(FRONTEND_FOLDER, 'login.html')
+
+@app.route('/dashboard')
+def dashboard_page():
+    return send_from_directory(FRONTEND_FOLDER, 'dashboard.html')
+
+@app.route('/account')
+def account_page():
+    return send_from_directory(FRONTEND_FOLDER, 'account.html')
+
+@app.route('/img/<path:filename>')
+def static_img(filename):
+    return send_from_directory(IMG_FOLDER, filename)
+
+@app.route('/all-projects')
+def all_projects_page():
+    return send_from_directory(FRONTEND_FOLDER, 'projects.html')
 
 @app.route('/api/projects', methods=['GET'])
 def list_projects():
@@ -761,7 +1505,14 @@ def generate_tour(project_id, scenes):
         for hs in scene.get('hotspots', []):
             hotspots.append({
                 "pitch": hs['pitch'], "yaw": hs['yaw'], "type": "info", "text": f"Go to {hs['target_name']}", "cssClass": "custom-hotspot",
-                "clickHandlerFunc": "smoothSwitch", "clickHandlerArgs": {"targetSceneId": hs['target_id'], "targetPitch": hs['pitch'], "targetYaw": hs['yaw']}
+                "clickHandlerFunc": "smoothSwitch",
+                "clickHandlerArgs": {
+                    "targetSceneId": hs['target_id'],
+                    "viaPitch": hs['pitch'],
+                    "viaYaw": hs['yaw'],
+                    "entryPitch": hs.get('entry_pitch', 0.0),
+                    "entryYaw": hs.get('entry_yaw', 0.0)
+                }
             })
         tour_config["scenes"][scene['id']] = {
             "title": scene['name'], "type": "equirectangular", "haov": scene.get('haov', 360), "vaov": scene.get('vaov', 180),
@@ -780,19 +1531,38 @@ def generate_tour(project_id, scenes):
         .custom-hotspot {{ height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }}
         .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
         .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
     </style>
 </head>
 <body>
     <div id="panorama"></div>
     <script>
+    const prefetchCache = new Set();
+    function prefetchScene(sceneId) {{
+        if (!sceneId || prefetchCache.has(sceneId)) return;
+        const scene = tourConfig.scenes[sceneId];
+        if (!scene || !scene.panorama) return;
+        const img = new Image();
+        img.src = scene.panorama;
+        prefetchCache.add(sceneId);
+    }}
+    function prefetchLinkedScenes(sceneId) {{
+        const scene = tourConfig.scenes[sceneId];
+        if (!scene || !scene.hotSpots) return;
+        scene.hotSpots.forEach(hs => prefetchScene(hs.clickHandlerArgs.targetSceneId));
+    }}
+
     function smoothSwitch(e, args) {{
         const viewer = window.viewer;
         const currentHfov = viewer.getHfov();
-        viewer.setHfov(currentHfov - 40, 800);
-        viewer.lookAt(args.targetPitch, args.targetYaw, currentHfov - 40, 800, () => {{
-            viewer.loadScene(args.targetSceneId);
-            setTimeout(() => {{ viewer.setHfov(currentHfov, 1200); }}, 500);
-        }});
+        const zoomTarget = currentHfov - 40;
+        viewer.setHfov(zoomTarget, 800);
+        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
+        // Start scene switch while zoom animation is still running for a smoother transition.
+        setTimeout(() => {{
+            viewer.loadScene(args.targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
+            setTimeout(() => {{ viewer.setHfov(currentHfov, 1000); }}, 120);
+        }}, 260);
     }}
     const tourConfig = {config_json};
     Object.values(tourConfig.scenes).forEach(scene => {{
@@ -803,6 +1573,8 @@ def generate_tour(project_id, scenes):
         }}
     }});
     window.viewer = pannellum.viewer('panorama', tourConfig);
+    prefetchLinkedScenes(tourConfig.default.firstScene);
+    window.viewer.on('scenechange', (sceneId) => prefetchLinkedScenes(sceneId));
     </script>
 </body>
 </html>"""
@@ -832,7 +1604,18 @@ def finalize_project(project_id):
 
 @app.route('/galleries/<project_id>/<path:filename>')
 def serve_gallery_files(project_id, filename):
+    db = get_db()
+    tour = db.execute(
+        "SELECT owner_id, visibility FROM tours WHERE id = ? AND deleted_at IS NULL",
+        (project_id,),
+    ).fetchone()
+    if tour is not None and tour["visibility"] == "private":
+        user = g.current_user
+        if user is None or user["id"] != tour["owner_id"]:
+            return jsonify({"error": "Forbidden"}), 403
     return send_from_directory(os.path.join(app.config['PROCESSED_FOLDER'], project_id), filename)
+
+init_db()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
