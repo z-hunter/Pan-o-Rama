@@ -1255,7 +1255,8 @@ def tours_add_scene(tour_id):
     db = get_db()
     count_row = db.execute("SELECT COUNT(*) AS c FROM scenes WHERE tour_id = ?", (tour["id"],)).fetchone()
     order_index = int(count_row["c"])
-    sid = f"scene_{order_index}"
+    # scenes.id is globally unique (not scoped by tour). Use UUID to avoid collisions across tours.
+    sid = str(uuid.uuid4())
     raw_dir = os.path.join(app.config["UPLOAD_FOLDER"], tour["id"], sid)
     proc_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour["id"], sid)
     os.makedirs(raw_dir, exist_ok=True)
@@ -1311,15 +1312,29 @@ def tours_add_scene(tour_id):
         with Image.open(img_p) as img:
             aspect = img.width / img.height
             vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
-            if is_pano and aspect >= 2.0:
-                detect_and_crop_overlap_wide(img_p)
-                with Image.open(img_p) as img_c:
-                    aspect = img_c.width / img_c.height
-                    haov = 360
-                    vaov = 360 / aspect
+            if is_pano:
+                # If user uploads a single already-stitched equirectangular 360, do NOT crop overlap.
+                # Overlap trimming is only for wide panoramas that accidentally contain duplicated seam content.
+                pano_file = processed[0]
+                haov = 360
+                vaov = 360 / aspect
             else:
                 haov = vaov_c * aspect
                 vaov = vaov_c
+
+    # Keep FOVs within Pannellum stable ranges for equirectangular panos.
+    if is_pano:
+        try:
+            ref_path = os.path.join(proc_dir, pano_file) if pano_file else os.path.join(proc_dir, processed[0])
+            with Image.open(ref_path) as img:
+                aspect = img.width / img.height
+            if vaov > 180.0 or haov > 360.0:
+                vaov = 180.0
+                haov = min(360.0, aspect * 180.0)
+            vaov = min(180.0, max(30.0, vaov))
+            haov = min(360.0, max(30.0, haov))
+        except Exception:
+            pass
 
     ts = now_iso()
     db.execute(
@@ -1526,6 +1541,45 @@ def stripe_price_map():
         os.getenv("STRIPE_PRICE_ID_BUSINESS"): PLAN_BUSINESS,
     }
 
+def infer_plan_from_subscription(sub_id):
+    """
+    Best-effort plan inference from a Stripe subscription by looking at item price ids.
+    Returns plan_id or None.
+    """
+    if not stripe_can_run() or not sub_id:
+        return None
+    try:
+        sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
+        price_to_plan = stripe_price_map()
+        best = None
+        for item in (sub.get("items") or {}).get("data", []):
+            price = item.get("price") or {}
+            pid = price.get("id")
+            plan = price_to_plan.get(pid)
+            if plan and (best is None or PLAN_ORDER.get(plan, 0) > PLAN_ORDER.get(best, 0)):
+                best = plan
+        return best
+    except Exception as e:
+        app.logger.error(f"Stripe infer plan failed: {e}")
+        return None
+
+def find_user_id_for_checkout_object(obj):
+    md = obj.get("metadata") or {}
+    user_id = (md.get("user_id") or "").strip()
+    if user_id:
+        return user_id
+    cr = (obj.get("client_reference_id") or "").strip()
+    if cr:
+        return cr
+    email = None
+    cd = obj.get("customer_details") or {}
+    email = (cd.get("email") or obj.get("customer_email") or "").strip().lower()
+    if not email:
+        return None
+    db = get_db()
+    row = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    return row["id"] if row else None
+
 @app.route("/billing/mock/subscribe", methods=["POST"])
 @require_auth
 def billing_mock_subscribe():
@@ -1566,7 +1620,9 @@ def billing_checkout():
             success_url=success_url,
             cancel_url=cancel_url,
             customer_email=customer_email,
+            client_reference_id=g.current_user["id"],
             metadata={"user_id": g.current_user["id"], "target_plan_id": plan_id},
+            subscription_data={"metadata": {"user_id": g.current_user["id"], "target_plan_id": plan_id}},
         )
         return jsonify({"url": session.url, "session_id": session.id}), 200
     except Exception as e:
@@ -1594,10 +1650,13 @@ def billing_webhook_stripe():
     db = get_db()
 
     if event_type == "checkout.session.completed":
-        user_id = ((obj.get("metadata") or {}).get("user_id") or "").strip()
-        target_plan_id = parse_plan_id((obj.get("metadata") or {}).get("target_plan_id"))
+        user_id = find_user_id_for_checkout_object(obj)
+        md = obj.get("metadata") or {}
+        target_plan_id = parse_plan_id(md.get("target_plan_id"))
         customer_id = obj.get("customer")
         sub_id = obj.get("subscription")
+        if target_plan_id is None:
+            target_plan_id = infer_plan_from_subscription(sub_id)
         if user_id and target_plan_id in {PLAN_PRO, PLAN_BUSINESS}:
             set_user_plan(
                 user_id,
@@ -1628,6 +1687,21 @@ def billing_webhook_stripe():
                 db.commit()
                 if event_type == "customer.subscription.deleted":
                     set_user_plan(row["user_id"], PLAN_FREE, provider="mock")
+    elif event_type == "customer.subscription.created":
+        # Some setups rely on subscription events rather than checkout.session metadata.
+        sub_id = obj.get("id")
+        customer_id = obj.get("customer")
+        md = obj.get("metadata") or {}
+        user_id = (md.get("user_id") or "").strip()
+        plan_id = parse_plan_id(md.get("target_plan_id")) or infer_plan_from_subscription(sub_id)
+        if user_id and plan_id in {PLAN_PRO, PLAN_BUSINESS}:
+            set_user_plan(
+                user_id,
+                plan_id,
+                provider="stripe",
+                provider_customer_id=customer_id,
+                provider_subscription_id=sub_id,
+            )
 
     return jsonify({"received": True}), 200
 
@@ -1821,9 +1895,19 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
                     "entryYaw": hs.get('entry_yaw', 0.0)
                 }
             })
+        safe_haov = float(scene.get('haov', 360) or 360)
+        safe_vaov = float(scene.get('vaov', 180) or 180)
+        safe_haov = min(360.0, max(30.0, safe_haov))
+        safe_vaov = min(180.0, max(30.0, safe_vaov))
         tour_config["scenes"][scene['id']] = {
-            "title": scene['name'], "type": "equirectangular", "haov": scene.get('haov', 360), "vaov": scene.get('vaov', 180),
-            "panorama": panorama_url, "hotSpots": hotspots, "minHfov": 30, "maxHfov": 120
+            "title": scene['name'],
+            "type": "equirectangular",
+            "haov": safe_haov,
+            "vaov": safe_vaov,
+            "panorama": panorama_url,
+            "hotSpots": hotspots,
+            "minHfov": 30,
+            "maxHfov": 120
         }
     config_json = json.dumps(tour_config, indent=4)
     watermark_html = '<div class="wm-badge">Created with Pan-o-Rama Free</div>' if watermark_enabled else ""

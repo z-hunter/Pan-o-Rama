@@ -26,9 +26,12 @@
         .btn-success { background: #28a745; color: white; }
         .btn-danger { background: #dc3545; color: white; }
         .btn-ghost { background: transparent; border: 1px solid #555; color: #ccc; }
+        .btn-sm { padding: 6px 8px; border-radius: 6px; font-size: 0.85rem; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .scene-item { background: #333; padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; cursor: pointer; border: 2px solid transparent; }
         .scene-item.active { border-color: #007bff; background: #3d3d3d; }
+        .scene-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
+        .scene-actions { display: flex; gap: 8px; align-items: center; }
         input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; }
         .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
         .hud.interactive { pointer-events: auto; }
@@ -342,9 +345,12 @@
             try {
                 const res = await apiFetch(`/tours/${projectId}/scenes`, { method: 'POST', body: formData });
                 if (!res) return;
-                const data = await res.json();
+                const text = await res.text();
+                let data = {};
+                try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
                 if (!res.ok || data.error) {
-                    alert("Error processing room: " + (data.error || 'Unknown error'));
+                    const msg = data.error || (text ? text.slice(0, 400) : 'Unknown error');
+                    alert("Error processing room: " + msg);
                     return;
                 }
                 scenes.push(data.scene);
@@ -365,10 +371,84 @@
             scenes.forEach(s => {
                 const div = document.createElement('div');
                 div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
-                div.innerHTML = `<span>🏠 ${s.name}</span>`;
+                div.innerHTML = `
+                    <span class="scene-title">🏠 ${s.name}</span>
+                    <span class="scene-actions">
+                        <button class="btn btn-danger btn-sm" type="button" data-scene-delete="${s.id}">Delete</button>
+                    </span>
+                `;
                 div.onclick = () => loadScene(s.id);
                 list.appendChild(div);
             });
+            list.querySelectorAll('button[data-scene-delete]').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deleteScene(btn.getAttribute('data-scene-delete'));
+                });
+            });
+        }
+
+        function showEmptyWorkspace() {
+            if (viewer) {
+                try { viewer.destroy(); } catch (_) {}
+                viewer = null;
+            }
+            activeSceneId = null;
+            document.getElementById('pano-editor').style.display = 'none';
+            document.getElementById('step1-workspace').style.display = 'block';
+            document.getElementById('editorHud').style.display = 'none';
+            refreshIncomingLinksPanel();
+            updateScenesUI();
+        }
+
+        async function deleteScene(sceneId) {
+            const scene = scenes.find(s => s.id === sceneId);
+            if (!scene) return;
+            const ok = confirm(`Delete scene "${scene.name}"? This cannot be undone.`);
+            if (!ok) return;
+            if (!projectId) return alert("No active tour.");
+
+            setLoading(true, "Deleting scene...");
+            try {
+                const res = await apiFetch(`/scenes/${encodeURIComponent(sceneId)}`, { method: 'DELETE' });
+                if (!res) return;
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    alert(data.error || 'Failed to delete scene');
+                    return;
+                }
+
+                // Remove the scene and purge hotspots that reference it.
+                scenes = scenes.filter(s => s.id !== sceneId);
+                for (const s of scenes) {
+                    s.hotspots = (s.hotspots || []).filter(h => h.target_id !== sceneId);
+                }
+
+                updateScenesUI();
+                // Update linking dropdown if currently in linking mode.
+                const select = document.getElementById('targetScene');
+                if (select && activeSceneId) {
+                    select.innerHTML = '<option value="">Select Destination...</option>';
+                    scenes.filter(s => s.id !== activeSceneId).forEach(s => {
+                        select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+                    });
+                }
+
+                if (activeSceneId === sceneId) {
+                    if (scenes.length > 0) {
+                        loadScene(scenes[0].id);
+                    } else {
+                        document.getElementById('gotoStep3').style.display = 'none';
+                        showStep(2);
+                        showEmptyWorkspace();
+                    }
+                } else {
+                    refreshIncomingLinksPanel();
+                }
+            } finally {
+                setLoading(false);
+            }
         }
 
         function bindLinkingHandler() {
@@ -427,17 +507,19 @@
             const imageRef = scene.panorama || (scene.images && scene.images[0]);
             if (!imageRef) return;
             const url = `/galleries/${projectId}/${id}/${imageRef}`;
+            const haov = Math.min(360, Math.max(30, Number(scene.haov || 100)));
+            const vaov = Math.min(180, Math.max(30, Number(scene.vaov || 60)));
 
             const config = {
                 "type": scene.type || "equirectangular",
                 "hfov": 70,
-                "haov": scene.haov || 100,
-                "vaov": scene.vaov || 60,
+                "haov": haov,
+                "vaov": vaov,
                 "panorama": url,
                 "autoLoad": true,
                 "sceneFadeDuration": 1000,
                 "minHfov": 30,
-                "maxHfov": scene.haov || 100,
+                "maxHfov": 120,
                 "hotSpots": (scene.hotspots || []).map(h => ({
                     pitch: h.pitch, yaw: h.yaw,
                     cssClass: "custom-hotspot",
