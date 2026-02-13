@@ -36,6 +36,10 @@
         .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
         .hud.interactive { pointer-events: auto; }
         .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 1000; flex-direction: column; }
+        .loading-progress { width: min(520px, 78vw); margin-top: 14px; }
+        .loading-progress .bar { height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }
+        .loading-progress .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }
+        .loading-progress .pct { margin-top: 8px; font-size: 0.95rem; color: #bcd7ff; text-align: center; }
         
         /* Portal Styles (shared with viewer) */
         .custom-hotspot { 
@@ -262,6 +266,10 @@
     <div class="loading-overlay" id="loader">
         <div style="font-size:2em; margin-bottom:10px;">⚙️</div>
         <div id="loaderText">Processing Assets...</div>
+        <div class="loading-progress" id="loaderProgress" style="display:none;">
+            <div class="bar"><div class="fill" id="loaderBar"></div></div>
+            <div class="pct" id="loaderPct">0%</div>
+        </div>
     </div>
 
     <script>
@@ -271,6 +279,8 @@
         let viewer = null;
         let lastClickCoords = null;
         const prefetchCache = new Set();
+        let sceneLoadTimer = null;
+        let sceneLoadPct = 0;
 
         function getTourIdFromQuery() {
             const params = new URLSearchParams(window.location.search);
@@ -477,6 +487,9 @@
             bindLinkingHandler();
             prefetchLinkedScenes(id);
             refreshIncomingLinksPanel();
+            try {
+                viewer.on('load', () => endSceneLoading());
+            } catch (_) {}
         }
 
         function getSceneImageUrl(sceneId) {
@@ -509,6 +522,7 @@
             const url = `/galleries/${projectId}/${id}/${imageRef}`;
             const haov = Math.min(360, Math.max(30, Number(scene.haov || 100)));
             const vaov = Math.min(180, Math.max(30, Number(scene.vaov || 60)));
+            beginSceneLoading(`Loading: ${scene.name}...`);
 
             const config = {
                 "type": scene.type || "equirectangular",
@@ -703,6 +717,43 @@
         function setLoading(show, text = "") {
             document.getElementById('loader').style.display = show ? 'flex' : 'none';
             document.getElementById('loaderText').textContent = text;
+            if (!show) {
+                const p = document.getElementById('loaderProgress');
+                if (p) p.style.display = 'none';
+                if (sceneLoadTimer) { clearInterval(sceneLoadTimer); sceneLoadTimer = null; }
+                sceneLoadPct = 0;
+            }
+        }
+
+        function setLoadingProgress(pct) {
+            const wrap = document.getElementById('loaderProgress');
+            const bar = document.getElementById('loaderBar');
+            const label = document.getElementById('loaderPct');
+            if (!wrap || !bar || !label) return;
+            wrap.style.display = 'block';
+            const v = Math.max(0, Math.min(100, Math.round(pct)));
+            bar.style.width = `${v}%`;
+            label.textContent = `${v}%`;
+        }
+
+        function beginSceneLoading(text = "Loading scene...") {
+            // Pannellum doesn't expose byte progress; use a smooth fake progress that completes on 'load'.
+            setLoading(true, text);
+            sceneLoadPct = 8;
+            setLoadingProgress(sceneLoadPct);
+            if (sceneLoadTimer) clearInterval(sceneLoadTimer);
+            sceneLoadTimer = setInterval(() => {
+                const cap = 92;
+                if (sceneLoadPct >= cap) return;
+                const step = sceneLoadPct < 40 ? 6 : (sceneLoadPct < 70 ? 3 : 1);
+                sceneLoadPct = Math.min(cap, sceneLoadPct + step);
+                setLoadingProgress(sceneLoadPct);
+            }, 220);
+        }
+
+        function endSceneLoading() {
+            setLoadingProgress(100);
+            setTimeout(() => setLoading(false), 180);
         }
 
         (async function bootstrap() {
