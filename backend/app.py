@@ -16,6 +16,10 @@ import sqlite3
 import hashlib
 import secrets
 import functools
+try:
+    import stripe
+except Exception:
+    stripe = None
 
 app = Flask(__name__)
 CORS(app)
@@ -40,6 +44,16 @@ app.logger.addHandler(handler)
 app.logger.setLevel(logging.DEBUG)
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+PLAN_FREE = "free"
+PLAN_PRO = "pro"
+PLAN_BUSINESS = "business"
+PLAN_ORDER = {PLAN_FREE: 0, PLAN_PRO: 1, PLAN_BUSINESS: 2}
+DEFAULT_PLAN_DEFS = {
+    PLAN_FREE: {"name": "Free", "max_tours": 2, "watermark_enabled": 1, "price_monthly_cents": 0},
+    PLAN_PRO: {"name": "Pro", "max_tours": 50, "watermark_enabled": 0, "price_monthly_cents": 4900},
+    PLAN_BUSINESS: {"name": "Business", "max_tours": 500, "watermark_enabled": 0, "price_monthly_cents": 19900},
+}
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
@@ -752,10 +766,42 @@ def init_db():
                 FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
                 FOREIGN KEY (to_scene_id) REFERENCES scenes(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS plans (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                max_tours INTEGER NOT NULL,
+                watermark_enabled INTEGER NOT NULL DEFAULT 1,
+                price_monthly_cents INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                billing_provider TEXT NOT NULL DEFAULT 'mock',
+                provider_customer_id TEXT,
+                provider_subscription_id TEXT,
+                current_period_end TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (plan_id) REFERENCES plans(id)
+            );
+            CREATE TABLE IF NOT EXISTS usage_counters (
+                user_id TEXT PRIMARY KEY,
+                tours_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
             CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
             CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
             CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -763,6 +809,15 @@ def init_db():
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_yaw REAL")
         if "entry_pitch" not in cols:
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_pitch REAL")
+        ts = now_iso()
+        for plan_id, d in DEFAULT_PLAN_DEFS.items():
+            db.execute(
+                """
+                INSERT OR IGNORE INTO plans (id, name, max_tours, watermark_enabled, price_monthly_cents, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (plan_id, d["name"], d["max_tours"], d["watermark_enabled"], d["price_monthly_cents"], ts, ts),
+            )
         db.commit()
     finally:
         db.close()
@@ -832,6 +887,106 @@ def serialize_scene(row):
         "vaov": row["vaov"],
         "type": row["scene_type"],
         "order_index": row["order_index"],
+    }
+
+def get_billing_mode():
+    mode = (os.getenv("BILLING_MODE") or "hybrid").strip().lower()
+    if mode not in {"mock", "hybrid", "stripe"}:
+        return "hybrid"
+    return mode
+
+def stripe_can_run():
+    mode = get_billing_mode()
+    return mode in {"hybrid", "stripe"} and stripe is not None and bool(os.getenv("STRIPE_SECRET_KEY"))
+
+def get_plan_row(plan_id):
+    db = get_db()
+    return db.execute("SELECT * FROM plans WHERE id = ? AND is_active = 1", (plan_id,)).fetchone()
+
+def get_active_subscription(user_id):
+    db = get_db()
+    return db.execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE user_id = ? AND status = 'active'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+
+def set_user_plan(user_id, plan_id, provider="mock", status="active", provider_customer_id=None, provider_subscription_id=None, period_end=None):
+    if plan_id not in PLAN_ORDER:
+        plan_id = PLAN_FREE
+    db = get_db()
+    ts = now_iso()
+    db.execute("UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE user_id = ? AND status = 'active'", (ts, user_id))
+    sub_id = str(uuid.uuid4())
+    db.execute(
+        """
+        INSERT INTO subscriptions (
+            id, user_id, plan_id, status, billing_provider, provider_customer_id, provider_subscription_id, current_period_end, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (sub_id, user_id, plan_id, status, provider, provider_customer_id, provider_subscription_id, period_end, ts, ts),
+    )
+    db.commit()
+    return db.execute("SELECT * FROM subscriptions WHERE id = ?", (sub_id,)).fetchone()
+
+def ensure_user_subscription(user_id):
+    sub = get_active_subscription(user_id)
+    if sub is not None:
+        return sub
+    return set_user_plan(user_id, PLAN_FREE, provider="mock")
+
+def get_user_plan(user_id):
+    sub = ensure_user_subscription(user_id)
+    plan = get_plan_row(sub["plan_id"]) if sub is not None else None
+    if plan is None:
+        # Fallback safety for broken references.
+        plan = get_plan_row(PLAN_FREE)
+    return plan, sub
+
+def compute_usage(user_id):
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS tours_count
+        FROM tours
+        WHERE owner_id = ? AND deleted_at IS NULL
+        """,
+        (user_id,),
+    ).fetchone()
+    count = int(row["tours_count"] if row else 0)
+    db.execute(
+        """
+        INSERT INTO usage_counters (user_id, tours_count, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET tours_count = excluded.tours_count, updated_at = excluded.updated_at
+        """,
+        (user_id, count, now_iso()),
+    )
+    db.commit()
+    return {"tours_count": count}
+
+def get_user_entitlements(user_id):
+    plan, sub = get_user_plan(user_id)
+    usage = compute_usage(user_id)
+    max_tours = int(plan["max_tours"]) if plan is not None else DEFAULT_PLAN_DEFS[PLAN_FREE]["max_tours"]
+    watermark = bool(plan["watermark_enabled"]) if plan is not None else True
+    remaining = max(0, max_tours - usage["tours_count"])
+    return {
+        "plan_id": plan["id"] if plan is not None else PLAN_FREE,
+        "plan_name": plan["name"] if plan is not None else DEFAULT_PLAN_DEFS[PLAN_FREE]["name"],
+        "max_tours": max_tours,
+        "watermark_enabled": watermark,
+        "usage": usage,
+        "remaining_tours": remaining,
+        "subscription": {
+            "status": sub["status"] if sub is not None else "active",
+            "billing_provider": sub["billing_provider"] if sub is not None else "mock",
+            "current_period_end": sub["current_period_end"] if sub is not None else None,
+        },
     }
 
 def fetch_tour_with_access(tour_id, require_owner=False):
@@ -931,6 +1086,7 @@ def auth_register():
         (uid, email, generate_password_hash(password), display_name or "User", ts, ts),
     )
     db.commit()
+    set_user_plan(uid, PLAN_FREE, provider="mock")
     row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     return create_session_response(row), 201
 
@@ -960,7 +1116,25 @@ def auth_logout():
 @require_auth
 def me_get():
     u = g.current_user
-    return jsonify({"id": u["id"], "email": u["email"], "display_name": u["display_name"]}), 200
+    ent = get_user_entitlements(u["id"])
+    return jsonify(
+        {
+            "id": u["id"],
+            "email": u["email"],
+            "display_name": u["display_name"],
+            "plan": {
+                "id": ent["plan_id"],
+                "name": ent["plan_name"],
+            },
+            "entitlements": {
+                "max_tours": ent["max_tours"],
+                "watermark_enabled": ent["watermark_enabled"],
+                "remaining_tours": ent["remaining_tours"],
+            },
+            "usage": ent["usage"],
+            "subscription": ent["subscription"],
+        }
+    ), 200
 
 @app.route("/me", methods=["PATCH"])
 @require_auth
@@ -993,6 +1167,10 @@ def me_password():
 @app.route("/tours", methods=["POST"])
 @require_auth
 def tours_create():
+    ent = get_user_entitlements(g.current_user["id"])
+    if ent["usage"]["tours_count"] >= ent["max_tours"]:
+        return jsonify({"error": "Plan limit reached", "code": "plan_limit_exceeded", "entitlements": ent}), 403
+
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip() or "Untitled Tour"
     description = (data.get("description") or "").strip()
@@ -1287,7 +1465,8 @@ def tours_finalize(tour_id):
     scenes = load_tour_scenes_and_hotspots(tour["id"])
     if not scenes:
         return jsonify({"error": "Tour must have at least one scene"}), 400
-    gallery_url = generate_tour(tour["id"], scenes)
+    ent = get_user_entitlements(g.current_user["id"])
+    gallery_url = generate_tour(tour["id"], scenes, watermark_enabled=ent["watermark_enabled"])
     db = get_db()
     db.execute("UPDATE tours SET status = 'published', updated_at = ? WHERE id = ?", (now_iso(), tour["id"]))
     db.commit()
@@ -1334,6 +1513,123 @@ def tours_hotspots_bulk(tour_id):
     db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
     db.commit()
     return jsonify({"message": "Hotspots replaced"}), 200
+
+def parse_plan_id(raw):
+    p = (raw or "").strip().lower()
+    if p in PLAN_ORDER:
+        return p
+    return None
+
+def stripe_price_map():
+    return {
+        os.getenv("STRIPE_PRICE_ID_PRO"): PLAN_PRO,
+        os.getenv("STRIPE_PRICE_ID_BUSINESS"): PLAN_BUSINESS,
+    }
+
+@app.route("/billing/mock/subscribe", methods=["POST"])
+@require_auth
+def billing_mock_subscribe():
+    data = request.get_json(silent=True) or {}
+    plan_id = parse_plan_id(data.get("plan_id"))
+    if plan_id is None:
+        return jsonify({"error": "Invalid plan_id"}), 400
+    set_user_plan(g.current_user["id"], plan_id, provider="mock")
+    ent = get_user_entitlements(g.current_user["id"])
+    return jsonify({"message": "Plan updated", "plan_id": ent["plan_id"], "entitlements": ent}), 200
+
+@app.route("/billing/checkout", methods=["POST"])
+@require_auth
+def billing_checkout():
+    if get_billing_mode() not in {"hybrid", "stripe"}:
+        return jsonify({"error": "Stripe checkout disabled by BILLING_MODE"}), 403
+    if not stripe_can_run():
+        return jsonify({"error": "Stripe is not configured"}), 503
+
+    data = request.get_json(silent=True) or {}
+    plan_id = parse_plan_id(data.get("plan_id"))
+    if plan_id not in {PLAN_PRO, PLAN_BUSINESS}:
+        return jsonify({"error": "Only paid plans supported in checkout"}), 400
+
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+    customer_email = g.current_user["email"]
+    origin = request.headers.get("Origin") or request.host_url.rstrip("/")
+    success_url = f"{origin}/account?billing=success"
+    cancel_url = f"{origin}/account?billing=cancel"
+    price_id = os.getenv("STRIPE_PRICE_ID_PRO") if plan_id == PLAN_PRO else os.getenv("STRIPE_PRICE_ID_BUSINESS")
+    if not price_id:
+        return jsonify({"error": "Stripe price id is not configured"}), 503
+
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": price_id, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            customer_email=customer_email,
+            metadata={"user_id": g.current_user["id"], "target_plan_id": plan_id},
+        )
+        return jsonify({"url": session.url, "session_id": session.id}), 200
+    except Exception as e:
+        app.logger.error(f"Stripe checkout error: {e}")
+        return jsonify({"error": "Failed to create checkout session"}), 500
+
+@app.route("/billing/webhook/stripe", methods=["POST"])
+def billing_webhook_stripe():
+    if not stripe_can_run():
+        return jsonify({"error": "Stripe is not configured"}), 503
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+    payload = request.data
+    signature = request.headers.get("Stripe-Signature")
+    endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    try:
+        if endpoint_secret:
+            event = stripe.Webhook.construct_event(payload, signature, endpoint_secret)
+        else:
+            event = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "Invalid webhook payload"}), 400
+
+    event_type = event.get("type")
+    obj = (event.get("data") or {}).get("object") or {}
+    db = get_db()
+
+    if event_type == "checkout.session.completed":
+        user_id = ((obj.get("metadata") or {}).get("user_id") or "").strip()
+        target_plan_id = parse_plan_id((obj.get("metadata") or {}).get("target_plan_id"))
+        customer_id = obj.get("customer")
+        sub_id = obj.get("subscription")
+        if user_id and target_plan_id in {PLAN_PRO, PLAN_BUSINESS}:
+            set_user_plan(
+                user_id,
+                target_plan_id,
+                provider="stripe",
+                provider_customer_id=customer_id,
+                provider_subscription_id=sub_id,
+            )
+    elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+        sub_id = obj.get("id")
+        if sub_id:
+            row = db.execute(
+                "SELECT * FROM subscriptions WHERE provider_subscription_id = ? ORDER BY created_at DESC LIMIT 1",
+                (sub_id,),
+            ).fetchone()
+            if row is not None:
+                status = obj.get("status") or "active"
+                if status not in {"active", "canceled", "past_due"}:
+                    status = "active"
+                current_period_end = None
+                cpe = obj.get("current_period_end")
+                if isinstance(cpe, (int, float)):
+                    current_period_end = datetime.datetime.utcfromtimestamp(cpe).replace(microsecond=0).isoformat() + "Z"
+                db.execute(
+                    "UPDATE subscriptions SET status = ?, current_period_end = ?, updated_at = ? WHERE id = ?",
+                    (status, current_period_end, now_iso(), row["id"]),
+                )
+                db.commit()
+                if event_type == "customer.subscription.deleted":
+                    set_user_plan(row["user_id"], PLAN_FREE, provider="mock")
+
+    return jsonify({"received": True}), 200
 
 @app.route("/gallery", methods=["GET"])
 def public_gallery():
@@ -1508,7 +1804,7 @@ def add_scene(project_id):
         return jsonify({'scene': s_data}), 200
     except Exception as e: app.logger.error(f"Error: {e}", exc_info=True); return jsonify({'error': str(e)}), 500
 
-def generate_tour(project_id, scenes):
+def generate_tour(project_id, scenes, watermark_enabled=False):
     tour_config = {"default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 1000, "autoLoad": True, "autoRotate": -2, "hfov": 70}, "scenes": {}}
     for scene in scenes:
         panorama_url = f"{scene['id']}/{scene['panorama'] if scene['panorama'] else scene['images'][0]}"
@@ -1530,6 +1826,7 @@ def generate_tour(project_id, scenes):
             "panorama": panorama_url, "hotSpots": hotspots, "minHfov": 30, "maxHfov": 120
         }
     config_json = json.dumps(tour_config, indent=4)
+    watermark_html = '<div class="wm-badge">Created with Pan-o-Rama Free</div>' if watermark_enabled else ""
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1543,10 +1840,12 @@ def generate_tour(project_id, scenes):
         .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
         .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
         .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
+        .wm-badge {{ position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }}
     </style>
 </head>
 <body>
     <div id="panorama"></div>
+    {watermark_html}
     <script>
     const prefetchCache = new Set();
     function prefetchScene(sceneId) {{

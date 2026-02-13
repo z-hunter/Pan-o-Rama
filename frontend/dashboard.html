@@ -16,6 +16,10 @@
     .muted { color: #667; font-size: 13px; }
     .row { margin-bottom: 10px; }
     .danger { background: #c53d3d; }
+    .plan { background: #f8fbff; border: 1px solid #d9e2ef; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .meter { height: 8px; background: #e6edf5; border-radius: 999px; overflow: hidden; margin-top: 6px; }
+    .meter > div { height: 100%; background: #2b7de9; }
+    .upgrade { background: #1e57a8; }
   </style>
 </head>
 <body>
@@ -28,6 +32,15 @@
   </div>
 
   <div class="wrap">
+    <div class="plan">
+      <div><strong id="planName">-</strong></div>
+      <div class="muted" id="planUsage">-</div>
+      <div class="meter"><div id="planBar" style="width:0%"></div></div>
+      <div style="margin-top:8px">
+        <button class="upgrade" onclick="location.href='/account'">Upgrade plan</button>
+      </div>
+    </div>
+
     <div class="card">
       <h3 style="margin-top:0">Create Tour</h3>
       <div class="row"><input id="title" placeholder="Tour title" /></div>
@@ -60,6 +73,16 @@ async function api(url, opts = {}) {
 async function loadMe() {
   const out = await api('/me');
   if (!out) return;
+  if (!out.res.ok) return;
+  const plan = out.data.plan || {};
+  const usage = out.data.usage || {};
+  const ent = out.data.entitlements || {};
+  const tours = usage.tours_count || 0;
+  const maxTours = ent.max_tours || 0;
+  const ratio = maxTours > 0 ? Math.min(100, Math.round((tours / maxTours) * 100)) : 0;
+  planName.textContent = `${plan.name || 'Free'} plan`;
+  planUsage.textContent = `Tours: ${tours} / ${maxTours} | Remaining: ${ent.remaining_tours ?? 0}`;
+  planBar.style.width = `${ratio}%`;
 }
 
 async function loadTours() {
@@ -97,10 +120,15 @@ async function createTour() {
     body: JSON.stringify(payload)
   });
   if (!out) return;
-  createMsg.textContent = out.res.ok ? 'Tour created' : (out.data.error || 'Failed');
+  if (!out.res.ok && out.data && out.data.code === 'plan_limit_exceeded') {
+    createMsg.innerHTML = `Plan limit reached. <a href="/account">Upgrade in Account</a>`;
+  } else {
+    createMsg.textContent = out.res.ok ? 'Tour created' : (out.data.error || 'Failed');
+  }
   if (out.res.ok) {
     title.value = '';
     description.value = '';
+    await loadMe();
     await loadTours();
   }
 }

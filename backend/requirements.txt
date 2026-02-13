@@ -4,3 +4,4 @@ Werkzeug
 opencv-python
 flask-cors
 numpy
+stripe

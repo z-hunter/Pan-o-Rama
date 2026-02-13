@@ -10,13 +10,30 @@
     .row { margin-bottom: 12px; }
     input { width: 100%; box-sizing: border-box; padding: 9px; }
     button { padding: 9px 12px; border: 0; border-radius: 6px; background: #007bff; color: #fff; cursor: pointer; }
+    .ghost { background: #eff4fb; color: #193860; border: 1px solid #c5d6ea; }
     .muted { color: #667; }
+    .plan { border: 1px solid #d9e2ef; border-radius: 8px; padding: 10px; background: #f8fbff; }
+    .meter { height: 8px; background: #e6edf5; border-radius: 999px; overflow: hidden; margin-top: 6px; }
+    .meter > div { height: 100%; background: #2b7de9; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h2>Account</h2>
     <p class="muted" id="email"></p>
+
+    <h3>Plan & Usage</h3>
+    <div class="plan">
+      <div><strong id="planName">-</strong></div>
+      <div class="muted" id="usageText">-</div>
+      <div class="meter"><div id="usageBar" style="width:0%"></div></div>
+      <div class="actions">
+        <button onclick="changePlan('pro')">Upgrade to Pro</button>
+        <button onclick="changePlan('business')">Upgrade to Business</button>
+        <button class="ghost" onclick="changePlan('free')">Downgrade to Free</button>
+      </div>
+    </div>
 
     <h3>Profile</h3>
     <div class="row"><input id="display" placeholder="Display name" /></div>
@@ -33,7 +50,9 @@
 <script>
 async function api(url, opts = {}) {
   const res = await fetch(url, opts);
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
   if (res.status === 401) {
     location.href = '/login';
     return null;
@@ -46,6 +65,15 @@ async function loadMe() {
   if (!out || !out.res.ok) return;
   email.textContent = out.data.email;
   display.value = out.data.display_name || '';
+  const plan = out.data.plan || {};
+  const usage = out.data.usage || {};
+  const ent = out.data.entitlements || {};
+  const tours = usage.tours_count || 0;
+  const maxTours = ent.max_tours || 0;
+  const ratio = maxTours > 0 ? Math.min(100, Math.round((tours / maxTours) * 100)) : 0;
+  planName.textContent = `${(plan.name || 'Free')} plan`;
+  usageText.textContent = `Tours: ${tours} / ${maxTours} | Remaining: ${ent.remaining_tours ?? 0} | Watermark: ${ent.watermark_enabled ? 'ON' : 'OFF'}`;
+  usageBar.style.width = `${ratio}%`;
 }
 
 async function saveProfile() {
@@ -70,6 +98,27 @@ async function changePassword() {
     current.value = '';
     next.value = '';
   }
+}
+
+async function changePlan(planId) {
+  const outCheckout = await api('/billing/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_id: planId })
+  });
+  if (outCheckout && outCheckout.res.ok && outCheckout.data.url) {
+    window.location.href = outCheckout.data.url;
+    return;
+  }
+
+  const outMock = await api('/billing/mock/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_id: planId })
+  });
+  if (!outMock) return;
+  msg.textContent = outMock.res.ok ? `Plan switched to ${planId}` : (outMock.data.error || 'Failed');
+  if (outMock.res.ok) await loadMe();
 }
 
 loadMe();
