@@ -1,8 +1,9 @@
-from flask import Flask, request, jsonify, send_from_directory, g, redirect
+from flask import Flask, request, jsonify, send_from_directory, send_file, g, redirect
 import os
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ExifTags, ImageOps
+from io import BytesIO
 import uuid
 import datetime
 import cv2
@@ -68,6 +69,100 @@ def safe_float(val, default=0.0):
             return float(val[0]) if len(val) > 0 else default
         return float(val)
     except: return default
+
+def build_gpano_xmp(width, height):
+    # Minimal GPano payload for Facebook/Google-style panorama viewers.
+    # Keep ASCII-only to avoid encoding edge cases.
+    return (
+        "<x:xmpmeta xmlns:x='adobe:ns:meta/'>"
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        "<rdf:Description xmlns:GPano='http://ns.google.com/photos/1.0/panorama/' "
+        "GPano:UsePanoramaViewer='True' "
+        "GPano:ProjectionType='equirectangular' "
+        f"GPano:FullPanoWidthPixels='{int(width)}' "
+        f"GPano:FullPanoHeightPixels='{int(height)}' "
+        f"GPano:CroppedAreaImageWidthPixels='{int(width)}' "
+        f"GPano:CroppedAreaImageHeightPixels='{int(height)}' "
+        "GPano:CroppedAreaLeftPixels='0' "
+        "GPano:CroppedAreaTopPixels='0'/>"
+        "</rdf:RDF>"
+        "</x:xmpmeta>"
+    ).encode("utf-8")
+
+def inject_xmp_into_jpeg(jpeg_bytes, xmp_xml_bytes):
+    """
+    Insert/replace XMP APP1 segment into a JPEG.
+    - Removes existing XMP segments (APP1 with Adobe XMP namespace header).
+    - Inserts new XMP APP1 right after SOI.
+    """
+    if not jpeg_bytes or len(jpeg_bytes) < 4 or jpeg_bytes[0:2] != b"\xff\xd8":
+        raise ValueError("Not a JPEG (missing SOI)")
+
+    xmp_header = b"http://ns.adobe.com/xap/1.0/\x00"
+    xmp_payload = xmp_header + (xmp_xml_bytes or b"")
+    seg_len = len(xmp_payload) + 2
+    if seg_len > 0xFFFF:
+        raise ValueError("XMP payload too large for APP1")
+    app1 = b"\xff\xe1" + seg_len.to_bytes(2, "big") + xmp_payload
+
+    # Rebuild segments: SOI + new APP1 + all non-XMP segments up to SOS + rest.
+    i = 2
+    out = bytearray()
+    out += b"\xff\xd8"
+    out += app1
+
+    # Walk segments until SOS/EOI.
+    while i + 4 <= len(jpeg_bytes):
+        if jpeg_bytes[i] != 0xFF:
+            # We are in entropy-coded data (should only happen after SOS), stop copying as segments.
+            out += jpeg_bytes[i:]
+            return bytes(out)
+        # Skip fill bytes 0xFF..0xFF
+        while i < len(jpeg_bytes) and jpeg_bytes[i] == 0xFF:
+            i += 1
+        if i >= len(jpeg_bytes):
+            break
+        marker = jpeg_bytes[i]
+        i += 1
+
+        # Markers without length
+        if marker in (0xD8, 0xD9):  # SOI, EOI
+            out += b"\xff" + bytes([marker])
+            if marker == 0xD9:
+                return bytes(out)
+            continue
+        if marker == 0xDA:  # SOS: copy header (with length) then rest of file as-is.
+            if i + 2 > len(jpeg_bytes):
+                break
+            segl = int.from_bytes(jpeg_bytes[i:i+2], "big")
+            seg_start = i - 2  # include length bytes
+            seg_end = seg_start + segl
+            if seg_end > len(jpeg_bytes):
+                break
+            out += b"\xff" + bytes([marker]) + jpeg_bytes[seg_start:seg_end]
+            out += jpeg_bytes[seg_end:]
+            return bytes(out)
+
+        # Normal segment with length
+        if i + 2 > len(jpeg_bytes):
+            break
+        segl = int.from_bytes(jpeg_bytes[i:i+2], "big")
+        seg_start = i
+        seg_end = i + segl
+        if seg_end > len(jpeg_bytes):
+            break
+        seg_data = jpeg_bytes[seg_start:seg_end]
+
+        if marker == 0xE1 and seg_data.startswith(xmp_header):
+            # Drop existing XMP APP1.
+            i = seg_end
+            continue
+
+        out += b"\xff" + bytes([marker]) + seg_data
+        i = seg_end
+
+    # Fallback: if parsing failed, at least return original bytes (without modifications).
+    return jpeg_bytes
 
 def detect_and_crop_overlap(image_path):
     """
@@ -1588,6 +1683,64 @@ def tours_finalize(tour_id):
     db.commit()
     share_url = f"/t/{tour['slug']}"
     return jsonify({"gallery_url": gallery_url, "share_url": share_url, "visibility": tour["visibility"]}), 200
+
+@app.route("/tours/<tour_id>/export/facebook360", methods=["GET"])
+@require_auth
+def tours_export_facebook360(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+
+    db = get_db()
+    scene = db.execute(
+        "SELECT * FROM scenes WHERE tour_id = ? ORDER BY order_index ASC LIMIT 1",
+        (tour["id"],),
+    ).fetchone()
+    if scene is None:
+        return jsonify({"error": "Tour has no scenes"}), 400
+
+    try:
+        haov = float(scene["haov"] or 0.0)
+    except Exception:
+        haov = 0.0
+    if haov < 300.0:
+        return jsonify({"error": "First scene is not a 360 panorama (haov < 300). Upload a 360 pano for scene 1."}), 400
+
+    proc_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour["id"], scene["id"])
+    pano = (scene["panorama_path"] or "").strip()
+    images = []
+    try:
+        images = json.loads(scene["images_json"] or "[]")
+    except Exception:
+        images = []
+    candidate = pano or (images[0] if images else "")
+    if not candidate:
+        return jsonify({"error": "First scene has no image assets"}), 400
+
+    img_path = os.path.join(proc_dir, candidate)
+    if not os.path.exists(img_path):
+        return jsonify({"error": "Scene image file not found on server"}), 404
+
+    try:
+        with Image.open(img_path) as im:
+            im = ImageOps.exif_transpose(im)
+            w, h = im.size
+        with open(img_path, "rb") as f:
+            raw = f.read()
+        xmp = build_gpano_xmp(w, h)
+        out = inject_xmp_into_jpeg(raw, xmp)
+        slug = (tour["slug"] or "tour").strip() or "tour"
+        filename = f"{slug}-facebook360.jpg"
+        return send_file(
+            BytesIO(out),
+            mimetype="image/jpeg",
+            as_attachment=True,
+            download_name=filename,
+            max_age=0,
+        )
+    except Exception as e:
+        app.logger.error(f"FB360 export failed: {e}", exc_info=True)
+        return jsonify({"error": "Failed to export Facebook 360 image"}), 500
 
 @app.route("/tours/<tour_id>/hotspots/bulk", methods=["POST"])
 @require_auth

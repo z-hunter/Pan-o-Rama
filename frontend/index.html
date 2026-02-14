@@ -223,6 +223,14 @@
 
                     <div style="margin-top:auto;">
                         <button class="btn btn-success" style="width:100%;" onclick="finalizeTour()">Finish & Publish</button>
+                        <div style="margin-top:12px; background:#2b2b2b; border:1px solid #444; padding:12px; border-radius:10px;">
+                            <div style="font-weight:700; color:#cfe6ff; margin-bottom:6px;">Share to Facebook (Hybrid)</div>
+                            <div style="font-size:0.92em; color:#b5b5b5; line-height:1.35; margin-bottom:10px;">
+                                Download a 360 photo of the first scene, upload it to Facebook, and paste your full tour link in the post text.
+                            </div>
+                            <button class="btn btn-primary" style="width:100%;" type="button" onclick="downloadFacebook360FirstScene()">Download FB 360 (First Scene)</button>
+                            <button class="btn btn-ghost" style="width:100%; margin-top:8px;" type="button" onclick="copyFullTourShareLink()">Copy Full Tour Link</button>
+                        </div>
                         <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Rooms</button>
                     </div>
                 </div>
@@ -704,6 +712,73 @@
                 }
                 if (data.gallery_url) window.open(data.gallery_url, '_blank');
             } finally { setLoading(false); }
+        }
+
+        async function downloadFacebook360FirstScene() {
+            if (!projectId) {
+                alert('No tour loaded');
+                return;
+            }
+            setLoading(true, "Preparing Facebook 360 export...");
+            try {
+                const res = await apiFetch(`/tours/${projectId}/export/facebook360`, { method: 'GET' });
+                if (!res) return;
+                if (!res.ok) {
+                    let msg = 'Export failed';
+                    try {
+                        const data = await res.json();
+                        msg = data.error || msg;
+                    } catch { /* ignore */ }
+                    alert(msg);
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                let filename = 'facebook360.jpg';
+                const cd = res.headers.get('Content-Disposition') || '';
+                const m = cd.match(/filename\\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+                if (m) filename = decodeURIComponent(m[1] || m[2] || filename);
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function copyFullTourShareLink() {
+            if (!projectId) {
+                alert('No tour loaded');
+                return;
+            }
+            setLoading(true, "Fetching share link...");
+            try {
+                const res = await apiFetch(`/tours/${projectId}`, { method: 'GET' });
+                if (!res) return;
+                const data = await res.json();
+                if (!res.ok || !data.tour) {
+                    alert(data.error || 'Failed to fetch tour');
+                    return;
+                }
+                const slug = data.tour.slug;
+                if (!slug) {
+                    alert('Tour slug is missing');
+                    return;
+                }
+                const shareUrl = `${window.location.origin}/t/${slug}`;
+                try {
+                    await navigator.clipboard.writeText(shareUrl);
+                    alert('Copied: ' + shareUrl);
+                } catch {
+                    prompt('Copy this link:', shareUrl);
+                }
+            } finally {
+                setLoading(false);
+            }
         }
 
         function showStep(n) {
