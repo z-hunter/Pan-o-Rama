@@ -47,6 +47,7 @@ app.logger.setLevel(logging.DEBUG)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
+GALLERY_TEMPLATE_VERSION = 2
 
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
@@ -2278,6 +2279,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 <html lang="en">
 <head>
     <meta charset="UTF-8"><title>Virtual Tour</title>
+    <meta name="lokalny_obiektyw_gallery_template" content="v{GALLERY_TEMPLATE_VERSION}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
@@ -2587,8 +2589,9 @@ def serve_gallery_files(project_id, filename):
                 try:
                     with open(ipath, "r", encoding="utf-8", errors="ignore") as f:
                         head = f.read(8192)
-                    # Marker that exists in the new template.
-                    if "tourLoader" in head and "sceneNav" in head:
+                    # Regenerate if template marker is missing or outdated.
+                    marker = f"lokalny_obiektyw_gallery_template\" content=\"v{GALLERY_TEMPLATE_VERSION}"
+                    if marker in head:
                         needs_regen = False
                 except Exception:
                     needs_regen = True
