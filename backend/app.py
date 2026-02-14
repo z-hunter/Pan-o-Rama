@@ -47,7 +47,7 @@ app.logger.setLevel(logging.DEBUG)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
-GALLERY_TEMPLATE_VERSION = 3
+GALLERY_TEMPLATE_VERSION = 4
 
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
@@ -808,12 +808,15 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
             im = ImageOps.exif_transpose(im)
             if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
-            # Maintain aspect ratio; limit to ~2K wide previews by default.
+            # Force a stable 2:1 preview for equirectangular panos; helps viewers and reduces surprises.
             try:
                 resample = Image.Resampling.LANCZOS
             except Exception:
                 resample = Image.LANCZOS
-            im.thumbnail(max_size, resample)
+            try:
+                im = ImageOps.fit(im, max_size, method=resample, centering=(0.5, 0.5))
+            except Exception:
+                im.thumbnail(max_size, resample)
             im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
         try:
             Image.MAX_IMAGE_PIXELS = old_max
@@ -2289,7 +2292,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
         .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
         .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
-        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; }}
+        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; pointer-events: none; }}
         .loading-title {{ font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; }}
         .loading-progress {{ width: min(520px, 78vw); margin-top: 12px; }}
         .loading-progress .bar {{ height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }}
@@ -2394,12 +2397,11 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	        }}, 160);
 	    }}
 
-	    function beginSceneLoadingSmart(sceneId, text) {{
-	        // If the target scene has a low-res preview, avoid covering the screen with a loader.
-	        // Otherwise, show loader only if load takes "long enough" to be noticeable.
-	        const sc = (sceneId && tourConfig && tourConfig.scenes) ? tourConfig.scenes[sceneId] : null;
-	        const hasPreview = !!(sc && sc.preview);
-	        const delayMs = hasPreview ? 999999 : 350;
+	    function beginSceneLoadingSmart(sceneId, text, opts) {{
+	        // Show loader only if load takes "long enough" to be noticeable.
+	        // Never fully suppress: even with previews, full-res may still take long and looks like a hang.
+	        const o = opts || {{}};
+	        const delayMs = (typeof o.delayMs === 'number') ? o.delayMs : 420;
 	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
 	        // Reset visuals but don't show yet.
 	        setLoader(false);
@@ -2479,13 +2481,19 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             }});
         }}
 	    }});
-	    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...');
+	    // Avoid Pannellum's "flat preview" feeling on the very first load: use full-res directly for first scene.
+	    try {{
+	        const fs = tourConfig.default && tourConfig.default.firstScene;
+	        if (fs && tourConfig.scenes && tourConfig.scenes[fs]) delete tourConfig.scenes[fs].preview;
+	    }} catch (_) {{}}
+
+	    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...', {{ delayMs: 0 }});
 	    window.viewer = pannellum.viewer('panorama', tourConfig);
 	    prefetchLinkedScenes(tourConfig.default.firstScene);
 	    window.viewer.on('scenechange', (sceneId) => {{
 	        prefetchLinkedScenes(sceneId);
 	        // If user navigates via built-in APIs, ensure loader appears.
-	        beginSceneLoadingSmart(sceneId, 'Loading scene...');
+	        beginSceneLoadingSmart(sceneId, 'Loading scene...', {{ delayMs: 420 }});
 	    }});
     window.viewer.on('load', () => {{
         try {{
@@ -2534,7 +2542,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
                 navMenu.style.display = 'none';
                 if (!window.viewer) return;
 	                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
-	                beginSceneLoadingSmart(sid, 'Loading scene...');
+	                beginSceneLoadingSmart(sid, 'Loading scene...', {{ delayMs: 420 }});
 	                transitioning = true;
 	                window.viewer.loadScene(sid);
 	            }});
