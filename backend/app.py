@@ -2360,18 +2360,18 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	        }}
 	    }}
 
-    function setLoader(show, text) {{
-        const el = document.getElementById('tourLoader');
-        const t = document.getElementById('tourLoaderText');
-        if (t && text) t.textContent = text;
-        if (!el) return;
-        el.style.display = show ? 'flex' : 'none';
-        if (!show) {{
-            if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
-            loadPct = 0;
-            setLoaderProgress(0);
-        }}
-    }}
+	    function setLoader(show, text) {{
+	        const el = document.getElementById('tourLoader');
+	        const t = document.getElementById('tourLoaderText');
+	        if (t && text) t.textContent = text;
+	        if (!el) return;
+	        el.style.display = show ? 'flex' : 'none';
+	        if (!show) {{
+	            if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+	            loadPct = 0;
+	            setLoaderProgress(0);
+	        }}
+	    }}
 
     function setLoaderProgress(pct) {{
         const bar = document.getElementById('tourLoaderBar');
@@ -2382,24 +2382,46 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         label.textContent = `${{v}}%`;
     }}
 
-    function beginSceneLoading(text) {{
-        setLoader(true, text || 'Loading scene...');
-        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
-        loadPct = Math.max(loadPct, 6);
-        setLoaderProgress(loadPct);
-        loadTimer = setInterval(() => {{
-            loadPct += (loadPct < 70 ? 6 : (loadPct < 90 ? 2 : 1));
-            if (loadPct >= 92) loadPct = 92;
-            setLoaderProgress(loadPct);
-        }}, 160);
-    }}
+	    let loaderShowTimer = null;
+	    function startFakeProgress() {{
+	        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+	        loadPct = Math.max(loadPct, 6);
+	        setLoaderProgress(loadPct);
+	        loadTimer = setInterval(() => {{
+	            loadPct += (loadPct < 70 ? 6 : (loadPct < 90 ? 2 : 1));
+	            if (loadPct >= 92) loadPct = 92;
+	            setLoaderProgress(loadPct);
+	        }}, 160);
+	    }}
 
-    function endSceneLoading() {{
-        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
-        loadPct = 100;
-        setLoaderProgress(100);
-        setTimeout(() => setLoader(false), 120);
-    }}
+	    function beginSceneLoadingSmart(sceneId, text) {{
+	        // If the target scene has a low-res preview, avoid covering the screen with a loader.
+	        // Otherwise, show loader only if load takes "long enough" to be noticeable.
+	        const sc = (sceneId && tourConfig && tourConfig.scenes) ? tourConfig.scenes[sceneId] : null;
+	        const hasPreview = !!(sc && sc.preview);
+	        const delayMs = hasPreview ? 999999 : 350;
+	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
+	        // Reset visuals but don't show yet.
+	        setLoader(false);
+	        loadPct = 0;
+	        setLoaderProgress(0);
+	        loaderShowTimer = setTimeout(() => {{
+	            setLoader(true, text || 'Loading scene...');
+	            startFakeProgress();
+	        }}, delayMs);
+	    }}
+
+	    function beginSceneLoading(text) {{
+	        beginSceneLoadingSmart(null, text);
+	    }}
+
+	    function endSceneLoading() {{
+	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
+	        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+	        loadPct = 100;
+	        setLoaderProgress(100);
+	        setTimeout(() => setLoader(false), 120);
+	    }}
 
     function defaultHfov() {{
         return (tourConfig.default && typeof tourConfig.default.hfov === 'number') ? tourConfig.default.hfov : 70;
@@ -2432,18 +2454,18 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         scene.hotSpots.forEach(hs => prefetchScene(hs.clickHandlerArgs.targetSceneId));
     }}
 
-    function smoothSwitch(e, args) {{
-        const viewer = window.viewer;
-        const fromScene = viewer.getScene();
-        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
-        const zoomTarget = Math.max(30, baseFrom - 40);
-        const targetSceneId = args.targetSceneId;
-        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
-        pendingRestore = {{ sceneId: targetSceneId, hfov: baseTarget }};
-        transitioning = true;
-        beginSceneLoading('Loading scene...');
-        viewer.setHfov(zoomTarget, 800);
-        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
+	    function smoothSwitch(e, args) {{
+	        const viewer = window.viewer;
+	        const fromScene = viewer.getScene();
+	        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
+	        const zoomTarget = Math.max(30, baseFrom - 40);
+	        const targetSceneId = args.targetSceneId;
+	        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
+	        pendingRestore = {{ sceneId: targetSceneId, hfov: baseTarget }};
+	        transitioning = true;
+	        beginSceneLoadingSmart(targetSceneId, 'Loading scene...');
+	        viewer.setHfov(zoomTarget, 800);
+	        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
         // Start scene switch while zoom animation is still running for a smoother transition.
         setTimeout(() => {{
             viewer.loadScene(targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
@@ -2456,15 +2478,15 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
                 if (hs.clickHandlerFunc === "smoothSwitch") hs.clickHandlerFunc = smoothSwitch;
             }});
         }}
-    }});
-    beginSceneLoading('Loading scene...');
-    window.viewer = pannellum.viewer('panorama', tourConfig);
-    prefetchLinkedScenes(tourConfig.default.firstScene);
-    window.viewer.on('scenechange', (sceneId) => {{
-        prefetchLinkedScenes(sceneId);
-        // If user navigates via built-in APIs, ensure loader appears.
-        beginSceneLoading('Loading scene...');
-    }});
+	    }});
+	    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...');
+	    window.viewer = pannellum.viewer('panorama', tourConfig);
+	    prefetchLinkedScenes(tourConfig.default.firstScene);
+	    window.viewer.on('scenechange', (sceneId) => {{
+	        prefetchLinkedScenes(sceneId);
+	        // If user navigates via built-in APIs, ensure loader appears.
+	        beginSceneLoadingSmart(sceneId, 'Loading scene...');
+	    }});
     window.viewer.on('load', () => {{
         try {{
             const sid = window.viewer.getScene();
@@ -2497,7 +2519,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
     // Scene dropdown navigation
     const navBtn = document.getElementById('sceneNavBtn');
     const navMenu = document.getElementById('sceneNavMenu');
-    function renderSceneMenu() {{
+	    function renderSceneMenu() {{
         if (!navMenu) return;
         navMenu.innerHTML = '';
         const ids = Object.keys(tourConfig.scenes || {{}});
@@ -2506,16 +2528,16 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             const item = document.createElement('div');
             item.className = 'scene-nav-item';
             item.innerHTML = `<span>${{(sc.title || sid)}}</span><span class="pill">#${{idx + 1}}</span>`;
-            item.addEventListener('click', (ev) => {{
+	            item.addEventListener('click', (ev) => {{
                 ev.preventDefault();
                 ev.stopPropagation();
                 navMenu.style.display = 'none';
                 if (!window.viewer) return;
-                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
-                beginSceneLoading('Loading scene...');
-                transitioning = true;
-                window.viewer.loadScene(sid);
-            }});
+	                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
+	                beginSceneLoadingSmart(sid, 'Loading scene...');
+	                transitioning = true;
+	                window.viewer.loadScene(sid);
+	            }});
             navMenu.appendChild(item);
         }});
     }}
