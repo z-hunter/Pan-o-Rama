@@ -2497,11 +2497,23 @@ def serve_gallery_files(project_id, filename):
                     generate_tour(project_id, scenes, watermark_enabled=owner_ent["watermark_enabled"])
         except Exception as e:
             app.logger.warning(f"On-demand gallery regen failed: {e}")
-    resp = send_from_directory(os.path.join(app.config['PROCESSED_FOLDER'], project_id), filename)
+    base_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
     # Avoid stale cached HTML in browsers/in-app webviews (Facebook, etc.).
+    # send_from_directory/send_file uses conditional responses and may end up with Cache-Control: no-cache.
+    # For the main HTML, return a plain response with no-store to force refresh.
     if filename.endswith(".html"):
+        fpath = os.path.join(base_dir, filename)
+        try:
+            with open(fpath, "rb") as f:
+                body = f.read()
+        except Exception:
+            body = None
+        if body is None:
+            return jsonify({"error": "Not found"}), 404
+        resp = app.response_class(body, mimetype="text/html")
         resp.headers["Cache-Control"] = "no-store"
-    return resp
+        return resp
+    return send_from_directory(base_dir, filename)
 
 init_db()
 
