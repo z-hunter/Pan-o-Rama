@@ -2211,7 +2211,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
         body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
-        #panorama {{ width: 100vw; height: 100vh; }}
+        #panorama {{ width: 100vw; height: 100vh; background: #0b0b0b; }}
         .custom-hotspot {{ height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }}
         .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
         .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
@@ -2466,6 +2466,29 @@ def serve_gallery_files(project_id, filename):
         user = g.current_user
         if user is None or user["id"] != tour["owner_id"]:
             return jsonify({"error": "Forbidden"}), 403
+    if filename == "index.html":
+        # Backward-compatible: older published tours may have a static index.html without the latest
+        # UX (loader, scene menu). Regenerate on-demand.
+        try:
+            pdir = os.path.join(app.config["PROCESSED_FOLDER"], project_id)
+            ipath = os.path.join(pdir, "index.html")
+            needs_regen = True
+            if os.path.exists(ipath):
+                try:
+                    with open(ipath, "r", encoding="utf-8", errors="ignore") as f:
+                        head = f.read(8192)
+                    # Marker that exists in the new template.
+                    if "tourLoader" in head and "sceneNav" in head:
+                        needs_regen = False
+                except Exception:
+                    needs_regen = True
+            if needs_regen and tour is not None:
+                scenes = load_tour_scenes_and_hotspots(project_id)
+                if scenes:
+                    owner_ent = get_user_entitlements(tour["owner_id"])
+                    generate_tour(project_id, scenes, watermark_enabled=owner_ent["watermark_enabled"])
+        except Exception as e:
+            app.logger.warning(f"On-demand gallery regen failed: {e}")
     return send_from_directory(os.path.join(app.config['PROCESSED_FOLDER'], project_id), filename)
 
 init_db()
