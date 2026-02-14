@@ -47,7 +47,7 @@ app.logger.setLevel(logging.DEBUG)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
-GALLERY_TEMPLATE_VERSION = 4
+GALLERY_TEMPLATE_VERSION = 5
 
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
@@ -2333,6 +2333,9 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	    let transitioning = false;
 	    let pendingRestore = null; // {{ sceneId, hfov }}
 	    const sceneState = {{}}; // sceneId -> {{ hfov }}
+	    let loaderShowTimer = null;
+	    let perfWatchTimer = null;
+	    let perfWatchUrl = null;
 
 	    function prefetchUrl(url) {{
 	        // Warm HTTP cache + best-effort decode to reduce perceived load time.
@@ -2385,7 +2388,6 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         label.textContent = `${{v}}%`;
     }}
 
-	    let loaderShowTimer = null;
 	    function startFakeProgress() {{
 	        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
 	        loadPct = Math.max(loadPct, 6);
@@ -2407,10 +2409,33 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	        setLoader(false);
 	        loadPct = 0;
 	        setLoaderProgress(0);
+	        // Reset resource-timing watcher.
+	        if (perfWatchTimer) {{ clearInterval(perfWatchTimer); perfWatchTimer = null; }}
+	        perfWatchUrl = null;
+	        try {{
+	            const sc = (sceneId && tourConfig && tourConfig.scenes) ? tourConfig.scenes[sceneId] : null;
+	            if (sc && sc.panorama) perfWatchUrl = sc.panorama;
+	        }} catch (_) {{}}
 	        loaderShowTimer = setTimeout(() => {{
 	            setLoader(true, text || 'Loading scene...');
 	            startFakeProgress();
 	        }}, delayMs);
+
+	        // Use PerformanceResourceTiming when available to detect when the full-res panorama URL finished loading.
+	        // Pannellum's 'load' can fire early (e.g., after preview), which makes the UI look stuck.
+	        if (perfWatchUrl && typeof performance !== 'undefined' && performance.getEntriesByName) {{
+	            perfWatchTimer = setInterval(() => {{
+	                try {{
+	                    const entries = performance.getEntriesByName(perfWatchUrl);
+	                    if (entries && entries.length) {{
+	                        const e = entries[entries.length - 1];
+	                        if (e && e.responseEnd && e.responseEnd > 0) {{
+	                            endSceneLoading();
+	                        }}
+	                    }}
+	                }} catch (_) {{}}
+	            }}, 120);
+	        }}
 	    }}
 
 	    function beginSceneLoading(text) {{
@@ -2419,6 +2444,8 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 
 	    function endSceneLoading() {{
 	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
+	        if (perfWatchTimer) {{ clearInterval(perfWatchTimer); perfWatchTimer = null; }}
+	        perfWatchUrl = null;
 	        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
 	        loadPct = 100;
 	        setLoaderProgress(100);
@@ -2495,8 +2522,8 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	        // If user navigates via built-in APIs, ensure loader appears.
 	        beginSceneLoadingSmart(sceneId, 'Loading scene...', {{ delayMs: 420 }});
 	    }});
-    window.viewer.on('load', () => {{
-        try {{
+	    window.viewer.on('load', () => {{
+	        try {{
             const sid = window.viewer.getScene();
             let target = defaultHfov();
             if (pendingRestore && pendingRestore.sceneId === sid) {{
@@ -2507,10 +2534,11 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             }}
             sceneState[sid] = {{ hfov: target }};
             window.viewer.setHfov(target, 0);
-        }} catch (_) {{}}
-        transitioning = false;
-        endSceneLoading();
-    }});
+	        }} catch (_) {{}}
+	        transitioning = false;
+	        // Keep endSceneLoading primarily driven by resource timing watcher; but ensure we never get stuck.
+	        setTimeout(() => endSceneLoading(), 800);
+	    }});
 
     // Track user zoom so we don't "lock" them to one hfov.
     const panoEl = document.getElementById('panorama');
