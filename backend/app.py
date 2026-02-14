@@ -2047,6 +2047,14 @@ def static_img(filename):
 def all_projects_page():
     return send_from_directory(FRONTEND_FOLDER, 'projects.html')
 
+@app.route('/projects.html')
+def projects_page():
+    return send_from_directory(FRONTEND_FOLDER, 'projects.html')
+
+@app.route('/browse')
+def browse_page():
+    return send_from_directory(FRONTEND_FOLDER, 'projects.html')
+
 @app.route('/api/projects', methods=['GET'])
 def list_projects():
     try:
