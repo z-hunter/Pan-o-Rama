@@ -790,18 +790,24 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (plan_id) REFERENCES plans(id)
             );
-            CREATE TABLE IF NOT EXISTS usage_counters (
-                user_id TEXT PRIMARY KEY,
-                tours_count INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
-            CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
-            CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
-            CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
-            CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
-            CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
+                CREATE TABLE IF NOT EXISTS usage_counters (
+                    user_id TEXT PRIMARY KEY,
+                    tours_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                -- Small KV cache for billing-related runtime ids (e.g., Stripe price ids created from $ amounts in dev).
+                CREATE TABLE IF NOT EXISTS billing_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
+                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
+                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
+                CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
+                CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -898,6 +904,101 @@ def get_billing_mode():
 def stripe_can_run():
     mode = get_billing_mode()
     return mode in {"hybrid", "stripe"} and stripe is not None and bool(os.getenv("STRIPE_SECRET_KEY"))
+
+def billing_kv_get(key):
+    db = get_db()
+    row = db.execute("SELECT value FROM billing_kv WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+def billing_kv_set(key, value):
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO billing_kv (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (key, value, now_iso()),
+    )
+    db.commit()
+
+def parse_usd_dollars_to_cents(raw):
+    """
+    Accepts strings like '5', '50', '5.00' and returns integer cents (500, 5000, ...).
+    Returns None for non-numeric inputs.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except Exception:
+        return None
+    if not (v > 0):
+        return None
+    return int(round(v * 100.0))
+
+def configured_stripe_price_id(plan_id, allow_create=False):
+    """
+    Supports two formats in env vars:
+      - a real Stripe price id: 'price_...'
+      - a USD amount in dollars: '5' (dev convenience; creates a recurring monthly price once and caches it)
+    """
+    if plan_id == PLAN_PRO:
+        env_name = "STRIPE_PRICE_ID_PRO"
+        plan_label = "Pro"
+    elif plan_id == PLAN_BUSINESS:
+        env_name = "STRIPE_PRICE_ID_BUSINESS"
+        plan_label = "Business"
+    else:
+        return None
+
+    raw = (os.getenv(env_name) or "").strip()
+    if raw.startswith("price_"):
+        return raw
+
+    cents = parse_usd_dollars_to_cents(raw)
+    if cents is None:
+        return None
+
+    # Prefer cached real price id to avoid creating duplicates.
+    cache_key = f"stripe.price_id.{env_name}.{cents}"
+    cached = billing_kv_get(cache_key)
+    if cached and cached.startswith("price_"):
+        return cached
+    if not allow_create:
+        return cached
+
+    if not stripe_can_run():
+        return None
+
+    # Create (or reuse cached) product per plan, then a recurring monthly price.
+    product_key = f"stripe.product_id.{plan_id}"
+    product_id = billing_kv_get(product_key)
+    try:
+        if not product_id:
+            product = stripe.Product.create(
+                name=f"PAN-O-RAMA {plan_label}",
+                metadata={"plan_id": plan_id},
+            )
+            product_id = product.get("id")
+            if product_id:
+                billing_kv_set(product_key, product_id)
+
+        price = stripe.Price.create(
+            product=product_id,
+            currency="usd",
+            unit_amount=cents,
+            recurring={"interval": "month"},
+            metadata={"plan_id": plan_id},
+        )
+        pid = price.get("id")
+        if pid:
+            billing_kv_set(cache_key, pid)
+        return pid
+    except Exception as e:
+        app.logger.error(f"Stripe price auto-create failed: {e}")
+        return None
 
 def get_plan_row(plan_id):
     db = get_db()
@@ -1536,10 +1637,15 @@ def parse_plan_id(raw):
     return None
 
 def stripe_price_map():
-    return {
-        os.getenv("STRIPE_PRICE_ID_PRO"): PLAN_PRO,
-        os.getenv("STRIPE_PRICE_ID_BUSINESS"): PLAN_BUSINESS,
-    }
+    # Webhook inference: do not create new prices here; only map configured or cached ids.
+    pro_pid = configured_stripe_price_id(PLAN_PRO, allow_create=False)
+    biz_pid = configured_stripe_price_id(PLAN_BUSINESS, allow_create=False)
+    out = {}
+    if pro_pid:
+        out[pro_pid] = PLAN_PRO
+    if biz_pid:
+        out[biz_pid] = PLAN_BUSINESS
+    return out
 
 def infer_plan_from_subscription(sub_id):
     """
@@ -1609,7 +1715,7 @@ def billing_checkout():
     origin = request.headers.get("Origin") or request.host_url.rstrip("/")
     success_url = f"{origin}/account?billing=success"
     cancel_url = f"{origin}/account?billing=cancel"
-    price_id = os.getenv("STRIPE_PRICE_ID_PRO") if plan_id == PLAN_PRO else os.getenv("STRIPE_PRICE_ID_BUSINESS")
+    price_id = configured_stripe_price_id(plan_id, allow_create=True)
     if not price_id:
         return jsonify({"error": "Stripe price id is not configured"}), 503
 
