@@ -46,6 +46,8 @@ app.logger.setLevel(logging.DEBUG)
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
+PREVIEW_FILENAME = "preview.jpg"
+
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
 PLAN_BUSINESS = "business"
@@ -776,6 +778,51 @@ def process_image(input_path, output_path, max_size=(16384, 16384), quality=98):
             return True
     except: return False
 
+def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PREVIEW_FILENAME, max_size=(2048, 1024), quality=82):
+    """
+    Create a low-res preview for quick transitions. Stored next to scene assets under processed_galleries.
+    Returns preview_filename when successful, else None.
+    """
+    if not tour_id or not scene_id or not source_filename:
+        return None
+    proc_dir = os.path.join(PROCESSED_FOLDER, tour_id, scene_id)
+    src_path = os.path.join(proc_dir, source_filename)
+    out_path = os.path.join(proc_dir, preview_filename)
+    try:
+        if os.path.exists(out_path):
+            return preview_filename
+        if not os.path.exists(src_path):
+            return None
+        # Panoramas can be very large; allow large images and try to hint to decoder that we only need a draft.
+        old_max = getattr(Image, "MAX_IMAGE_PIXELS", None)
+        try:
+            Image.MAX_IMAGE_PIXELS = None
+        except Exception:
+            pass
+        with Image.open(src_path) as im:
+            try:
+                im.draft("RGB", max_size)
+            except Exception:
+                pass
+            im = ImageOps.exif_transpose(im)
+            if im.mode in ("RGBA", "P"):
+                im = im.convert("RGB")
+            # Maintain aspect ratio; limit to ~2K wide previews by default.
+            try:
+                resample = Image.Resampling.LANCZOS
+            except Exception:
+                resample = Image.LANCZOS
+            im.thumbnail(max_size, resample)
+            im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
+        try:
+            Image.MAX_IMAGE_PIXELS = old_max
+        except Exception:
+            pass
+        return preview_filename
+    except Exception as e:
+        app.logger.warning(f"Preview generation failed: {e}")
+        return None
+
 def now_iso():
     return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
@@ -831,15 +878,16 @@ def init_db():
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
             );
-            CREATE TABLE IF NOT EXISTS scenes (
-                id TEXT PRIMARY KEY,
-                tour_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                panorama_path TEXT,
-                images_json TEXT NOT NULL DEFAULT '[]',
-                order_index INTEGER NOT NULL,
-                haov REAL NOT NULL DEFAULT 360,
-                vaov REAL NOT NULL DEFAULT 180,
+	            CREATE TABLE IF NOT EXISTS scenes (
+	                id TEXT PRIMARY KEY,
+	                tour_id TEXT NOT NULL,
+	                title TEXT NOT NULL,
+	                panorama_path TEXT,
+	                preview_path TEXT,
+	                images_json TEXT NOT NULL DEFAULT '[]',
+	                order_index INTEGER NOT NULL,
+	                haov REAL NOT NULL DEFAULT 360,
+	                vaov REAL NOT NULL DEFAULT 180,
                 scene_type TEXT NOT NULL DEFAULT 'equirectangular',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -910,6 +958,9 @@ def init_db():
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_yaw REAL")
         if "entry_pitch" not in cols:
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_pitch REAL")
+        scene_cols = [r[1] for r in db.execute("PRAGMA table_info(scenes)").fetchall()]
+        if "preview_path" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN preview_path TEXT")
         ts = now_iso()
         for plan_id, d in DEFAULT_PLAN_DEFS.items():
             db.execute(
@@ -983,6 +1034,7 @@ def serialize_scene(row):
         "tour_id": row["tour_id"],
         "name": row["title"],
         "panorama": row["panorama_path"],
+        "preview": row["preview_path"],
         "images": json.loads(row["images_json"] or "[]"),
         "haov": row["haov"],
         "vaov": row["vaov"],
@@ -1533,12 +1585,15 @@ def tours_add_scene(tour_id):
             pass
 
     ts = now_iso()
+    # Generate preview for faster transitions (use pano when present, else the first processed frame).
+    src_for_preview = pano_file or (processed[0] if processed else None)
+    preview_path = ensure_scene_preview(tour["id"], sid, src_for_preview) if src_for_preview else None
     db.execute(
         """
-        INSERT INTO scenes (id, tour_id, title, panorama_path, images_json, order_index, haov, vaov, scene_type, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'equirectangular', ?, ?)
+        INSERT INTO scenes (id, tour_id, title, panorama_path, preview_path, images_json, order_index, haov, vaov, scene_type, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'equirectangular', ?, ?)
         """,
-        (sid, tour["id"], name, pano_file, json.dumps(processed), order_index, round(haov, 2), round(vaov, 2), ts, ts),
+        (sid, tour["id"], name, pano_file, preview_path, json.dumps(processed), order_index, round(haov, 2), round(vaov, 2), ts, ts),
     )
     db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
     db.commit()
@@ -2181,7 +2236,12 @@ def add_scene(project_id):
 def generate_tour(project_id, scenes, watermark_enabled=False):
     tour_config = {"default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 1000, "autoLoad": True, "autoRotate": -2, "hfov": 70}, "scenes": {}}
     for scene in scenes:
-        panorama_url = f"{scene['id']}/{scene['panorama'] if scene['panorama'] else scene['images'][0]}"
+        pano_name = scene.get('panorama') or ((scene.get('images') or [None])[0])
+        if not pano_name:
+            continue
+        panorama_url = f"{scene['id']}/{pano_name}"
+        preview_name = scene.get("preview") or ensure_scene_preview(project_id, scene['id'], pano_name)
+        preview_url = f"{scene['id']}/{preview_name}" if preview_name else None
         hotspots = []
         for hs in scene.get('hotspots', []):
             hotspots.append({
@@ -2199,7 +2259,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         safe_vaov = float(scene.get('vaov', 180) or 180)
         safe_haov = min(360.0, max(30.0, safe_haov))
         safe_vaov = min(180.0, max(30.0, safe_vaov))
-        tour_config["scenes"][scene['id']] = {
+        cfg = {
             "title": scene['name'],
             "type": "equirectangular",
             "haov": safe_haov,
@@ -2209,6 +2269,9 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             "minHfov": 30,
             "maxHfov": 120
         }
+        if preview_url:
+            cfg["preview"] = preview_url
+        tour_config["scenes"][scene['id']] = cfg
     config_json = json.dumps(tour_config, indent=4)
     watermark_html = '<div class="wm-badge">Created with Pan-o-Rama Free</div>' if watermark_enabled else ""
     html_content = f"""<!DOCTYPE html>
@@ -2254,13 +2317,46 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         </div>
     </div>
     {watermark_html}
-    <script>
-    const prefetchCache = new Set();
-    let loadTimer = null;
-    let loadPct = 0;
-    let transitioning = false;
+	    <script>
+	    const prefetchCache = new Set();
+	    const prefetchPromises = new Map(); // sceneId -> Promise
+	    const prefetchQueue = [];
+	    const PREFETCH_CONCURRENCY = 2;
+	    let prefetchInflight = 0;
+	    let loadTimer = null;
+	    let loadPct = 0;
+	    let transitioning = false;
 	    let pendingRestore = null; // {{ sceneId, hfov }}
 	    const sceneState = {{}}; // sceneId -> {{ hfov }}
+
+	    function prefetchUrl(url) {{
+	        // Warm HTTP cache + best-effort decode to reduce perceived load time.
+	        return fetch(url, {{ cache: 'force-cache' }})
+	            .then(r => r.ok ? r.blob() : null)
+	            .then(b => {{
+	                if (!b) return;
+	                if (typeof createImageBitmap === 'function') {{
+	                    return createImageBitmap(b)
+	                        .then(bm => {{ try {{ bm.close(); }} catch (_) {{}} }})
+	                        .catch(() => {{}});
+	                }}
+	            }})
+	            .catch(() => {{}});
+	    }}
+
+	    function pumpPrefetch() {{
+	        while (prefetchInflight < PREFETCH_CONCURRENCY && prefetchQueue.length) {{
+	            const sceneId = prefetchQueue.shift();
+	            const scene = tourConfig.scenes[sceneId];
+	            if (!scene || !scene.panorama) continue;
+	            prefetchInflight++;
+	            const p = prefetchUrl(scene.panorama).finally(() => {{
+	                prefetchInflight--;
+	                pumpPrefetch();
+	            }});
+	            prefetchPromises.set(sceneId, p);
+	        }}
+	    }}
 
     function setLoader(show, text) {{
         const el = document.getElementById('tourLoader');
@@ -2314,14 +2410,20 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         sceneState[sid] = {{ hfov: window.viewer.getHfov() }};
     }}
 
-    function prefetchScene(sceneId) {{
-        if (!sceneId || prefetchCache.has(sceneId)) return;
-        const scene = tourConfig.scenes[sceneId];
-        if (!scene || !scene.panorama) return;
-        const img = new Image();
-        img.src = scene.panorama;
-        prefetchCache.add(sceneId);
-    }}
+	    function prefetchScene(sceneId) {{
+	        if (!sceneId || prefetchCache.has(sceneId)) return;
+	        const scene = tourConfig.scenes[sceneId];
+	        if (!scene || !scene.panorama) return;
+	        if (scene.preview) {{
+	            const img = new Image();
+	            img.src = scene.preview;
+	        }}
+	        if (!prefetchPromises.has(sceneId)) {{
+	            prefetchQueue.push(sceneId);
+	            pumpPrefetch();
+	        }}
+	        prefetchCache.add(sceneId);
+	    }}
     function prefetchLinkedScenes(sceneId) {{
         const scene = tourConfig.scenes[sceneId];
         if (!scene || !scene.hotSpots) return;
@@ -2513,7 +2615,11 @@ def serve_gallery_files(project_id, filename):
         resp = app.response_class(body, mimetype="text/html")
         resp.headers["Cache-Control"] = "no-store"
         return resp
-    return send_from_directory(base_dir, filename)
+    resp = send_from_directory(base_dir, filename)
+    # Cache images aggressively; names are stable and served per-tour.
+    if filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 init_db()
 

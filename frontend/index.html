@@ -508,16 +508,29 @@
             return `/galleries/${projectId}/${sceneId}/${imageRef}`;
         }
 
+        function getScenePreviewUrl(sceneId) {
+            const scene = scenes.find(s => s.id === sceneId);
+            if (!scene) return null;
+            const p = scene.preview || 'preview.jpg';
+            return `/galleries/${projectId}/${sceneId}/${p}`;
+        }
+
         function prefetchLinkedScenes(sceneId) {
             const scene = scenes.find(s => s.id === sceneId);
             if (!scene || !scene.hotspots) return;
             scene.hotspots.forEach(h => {
                 const targetId = h.target_id;
                 if (!targetId || prefetchCache.has(targetId)) return;
+                const preview = getScenePreviewUrl(targetId);
+                if (preview) {
+                    const img = new Image();
+                    img.src = preview;
+                }
                 const src = getSceneImageUrl(targetId);
-                if (!src) return;
-                const img = new Image();
-                img.src = src;
+                if (src) {
+                    const img2 = new Image();
+                    img2.src = src;
+                }
                 prefetchCache.add(targetId);
             });
         }
@@ -538,6 +551,7 @@
                 "haov": haov,
                 "vaov": vaov,
                 "panorama": url,
+                "preview": getScenePreviewUrl(id),
                 "autoLoad": true,
                 "sceneFadeDuration": 1000,
                 "minHfov": 30,
