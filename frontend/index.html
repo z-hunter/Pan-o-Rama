@@ -186,21 +186,21 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div id="project-scenes" style="display:none; flex-direction: column; flex: 1; min-height: 0;">
-                <h3>Scenes & Rooms</h3>
+                <h3>Scenes</h3>
                 <div id="scenesList" style="flex:1; overflow-y:auto; margin-bottom: 15px;"></div>
                 <hr style="border-color:#444; margin:15px 0;">
                 
-                <!-- Step 2 content: Add Room -->
+                <!-- Step 2 content: Add Scene -->
                 <div id="step2" class="step">
-                    <h4>Add Room</h4>
+                    <h4>Add Scene</h4>
                     <input type="text" id="sceneName" placeholder="e.g. Lobby">
                     <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
                     <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
                         <input type="checkbox" id="isPano" style="width:auto;">
                         <label for="isPano">This is a 360° Panorama</label>
                     </div>
-                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Room</button>
-                    <button class="btn btn-primary" id="gotoStep3" style="display:none; margin-top:15px;" onclick="startLinking()">Link Rooms &rarr;</button>
+                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Scene</button>
+                    <button class="btn btn-primary" id="gotoStep3" style="display:none; margin-top:15px;" onclick="startLinking()">Link Scenes &rarr;</button>
                 </div>
 
                 <!-- Step 3 content: Linking -->
@@ -231,7 +231,7 @@
                             <button class="btn btn-primary" style="width:100%;" type="button" onclick="downloadFacebook360FirstScene()">Download FB 360 (First Scene)</button>
                             <button class="btn btn-ghost" style="width:100%; margin-top:8px;" type="button" onclick="copyFullTourShareLink()">Copy Full Tour Link</button>
                         </div>
-                        <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Rooms</button>
+                        <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Scenes</button>
                     </div>
                 </div>
             </div>
@@ -368,7 +368,7 @@
                 try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
                 if (!res.ok || data.error) {
                     const msg = data.error || (text ? text.slice(0, 400) : 'Unknown error');
-                    alert("Error processing room: " + msg);
+                    alert("Error processing scene: " + msg);
                     return;
                 }
                 scenes.push(data.scene);

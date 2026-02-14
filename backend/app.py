@@ -1722,11 +1722,44 @@ def tours_export_facebook360(tour_id):
         return jsonify({"error": "Scene image file not found on server"}), 404
 
     try:
+        max_w = 6000
+        max_h = 3000
+        try:
+            max_w = int(os.getenv("FB360_MAX_WIDTH") or max_w)
+            max_h = int(os.getenv("FB360_MAX_HEIGHT") or max_h)
+        except Exception:
+            max_w, max_h = 6000, 3000
+
         with Image.open(img_path) as im:
             im = ImageOps.exif_transpose(im)
+            if im.mode in ("RGBA", "P"):
+                im = im.convert("RGB")
             w, h = im.size
-        with open(img_path, "rb") as f:
-            raw = f.read()
+            needs_resize = (w > max_w) or (h > max_h)
+            if needs_resize:
+                scale = min(max_w / float(w), max_h / float(h))
+                nw = max(2, int(w * scale))
+                nh = max(2, int(h * scale))
+                # JPEG encoders and some viewers behave better with even dimensions.
+                nw -= (nw % 2)
+                nh -= (nh % 2)
+                if nw < 2:
+                    nw = 2
+                if nh < 2:
+                    nh = 2
+                try:
+                    resample = Image.Resampling.LANCZOS
+                except Exception:
+                    resample = Image.LANCZOS
+                im = im.resize((nw, nh), resample=resample)
+                buf = BytesIO()
+                im.save(buf, format="JPEG", quality=92, optimize=True, progressive=True, subsampling=0)
+                raw = buf.getvalue()
+                w, h = nw, nh
+            else:
+                with open(img_path, "rb") as f:
+                    raw = f.read()
+
         xmp = build_gpano_xmp(w, h)
         out = inject_xmp_into_jpeg(raw, xmp)
         slug = (tour["slug"] or "tour").strip() or "tour"
@@ -2183,14 +2216,96 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
         .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
         .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
+        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; }}
+        .loading-title {{ font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; }}
+        .loading-progress {{ width: min(520px, 78vw); margin-top: 12px; }}
+        .loading-progress .bar {{ height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }}
+        .loading-progress .fill {{ height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }}
+        .loading-progress .pct {{ margin-top: 8px; font: 600 13px/1.2 'Segoe UI', sans-serif; color: #bcd7ff; text-align: center; }}
+        .scene-nav {{ position: fixed; top: 14px; right: 14px; z-index: 9999; pointer-events: auto; }}
+        .scene-nav-btn {{ width: 44px; height: 44px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.55); color: #e6f1ff; font: 800 18px/1 'Segoe UI', sans-serif; cursor: pointer; }}
+        .scene-nav-btn:hover {{ background: rgba(0,0,0,0.7); border-color: rgba(77,163,255,0.55); }}
+        .scene-nav-menu {{ position: absolute; top: 52px; right: 0; width: min(320px, 78vw); max-height: 50vh; overflow: auto; display: none; background: rgba(10,10,10,0.9); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }}
+        .scene-nav-item {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px; border-radius: 10px; cursor: pointer; color: #d8e8ff; font: 600 14px/1.2 'Segoe UI', sans-serif; }}
+        .scene-nav-item:hover {{ background: rgba(77,163,255,0.16); }}
+        .scene-nav-item .pill {{ font: 700 11px/1 'Segoe UI', sans-serif; color: #9fc7ff; border: 1px solid rgba(77,163,255,0.35); background: rgba(0,0,0,0.35); padding: 4px 8px; border-radius: 999px; }}
         .wm-badge {{ position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }}
     </style>
 </head>
 <body>
     <div id="panorama"></div>
+    <div class="scene-nav" id="sceneNav">
+        <button class="scene-nav-btn" id="sceneNavBtn" type="button" aria-label="Scenes">S</button>
+        <div class="scene-nav-menu" id="sceneNavMenu"></div>
+    </div>
+    <div class="loading-overlay" id="tourLoader">
+        <div class="loading-title" id="tourLoaderText">Loading scene...</div>
+        <div class="loading-progress">
+            <div class="bar"><div class="fill" id="tourLoaderBar"></div></div>
+            <div class="pct" id="tourLoaderPct">0%</div>
+        </div>
+    </div>
     {watermark_html}
     <script>
     const prefetchCache = new Set();
+    let loadTimer = null;
+    let loadPct = 0;
+    let transitioning = false;
+	    let pendingRestore = null; // {{ sceneId, hfov }}
+	    const sceneState = {{}}; // sceneId -> {{ hfov }}
+
+    function setLoader(show, text) {{
+        const el = document.getElementById('tourLoader');
+        const t = document.getElementById('tourLoaderText');
+        if (t && text) t.textContent = text;
+        if (!el) return;
+        el.style.display = show ? 'flex' : 'none';
+        if (!show) {{
+            if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+            loadPct = 0;
+            setLoaderProgress(0);
+        }}
+    }}
+
+    function setLoaderProgress(pct) {{
+        const bar = document.getElementById('tourLoaderBar');
+        const label = document.getElementById('tourLoaderPct');
+        if (!bar || !label) return;
+        const v = Math.max(0, Math.min(100, Math.round(pct)));
+        bar.style.width = `${{v}}%`;
+        label.textContent = `${{v}}%`;
+    }}
+
+    function beginSceneLoading(text) {{
+        setLoader(true, text || 'Loading scene...');
+        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+        loadPct = Math.max(loadPct, 6);
+        setLoaderProgress(loadPct);
+        loadTimer = setInterval(() => {{
+            loadPct += (loadPct < 70 ? 6 : (loadPct < 90 ? 2 : 1));
+            if (loadPct >= 92) loadPct = 92;
+            setLoaderProgress(loadPct);
+        }}, 160);
+    }}
+
+    function endSceneLoading() {{
+        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+        loadPct = 100;
+        setLoaderProgress(100);
+        setTimeout(() => setLoader(false), 120);
+    }}
+
+    function defaultHfov() {{
+        return (tourConfig.default && typeof tourConfig.default.hfov === 'number') ? tourConfig.default.hfov : 70;
+    }}
+
+    function storeBaseHfov() {{
+        if (!window.viewer || transitioning) return;
+        const sid = window.viewer.getScene();
+        if (!sid) return;
+        sceneState[sid] = {{ hfov: window.viewer.getHfov() }};
+    }}
+
     function prefetchScene(sceneId) {{
         if (!sceneId || prefetchCache.has(sceneId)) return;
         const scene = tourConfig.scenes[sceneId];
@@ -2207,14 +2322,19 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 
     function smoothSwitch(e, args) {{
         const viewer = window.viewer;
-        const currentHfov = viewer.getHfov();
-        const zoomTarget = currentHfov - 40;
+        const fromScene = viewer.getScene();
+        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
+        const zoomTarget = Math.max(30, baseFrom - 40);
+        const targetSceneId = args.targetSceneId;
+        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
+        pendingRestore = {{ sceneId: targetSceneId, hfov: baseTarget }};
+        transitioning = true;
+        beginSceneLoading('Loading scene...');
         viewer.setHfov(zoomTarget, 800);
         viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
         // Start scene switch while zoom animation is still running for a smoother transition.
         setTimeout(() => {{
-            viewer.loadScene(args.targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
-            setTimeout(() => {{ viewer.setHfov(currentHfov, 1000); }}, 120);
+            viewer.loadScene(targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
         }}, 260);
     }}
     const tourConfig = {config_json};
@@ -2225,9 +2345,89 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             }});
         }}
     }});
+    beginSceneLoading('Loading scene...');
     window.viewer = pannellum.viewer('panorama', tourConfig);
     prefetchLinkedScenes(tourConfig.default.firstScene);
-    window.viewer.on('scenechange', (sceneId) => prefetchLinkedScenes(sceneId));
+    window.viewer.on('scenechange', (sceneId) => {{
+        prefetchLinkedScenes(sceneId);
+        // If user navigates via built-in APIs, ensure loader appears.
+        beginSceneLoading('Loading scene...');
+    }});
+    window.viewer.on('load', () => {{
+        try {{
+            const sid = window.viewer.getScene();
+            let target = defaultHfov();
+            if (pendingRestore && pendingRestore.sceneId === sid) {{
+                target = pendingRestore.hfov;
+                pendingRestore = null;
+            }} else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {{
+                target = sceneState[sid].hfov;
+            }}
+            sceneState[sid] = {{ hfov: target }};
+            window.viewer.setHfov(target, 0);
+        }} catch (_) {{}}
+        transitioning = false;
+        endSceneLoading();
+    }});
+
+    // Track user zoom so we don't "lock" them to one hfov.
+    const panoEl = document.getElementById('panorama');
+    if (panoEl) {{
+        panoEl.addEventListener('mouseup', () => setTimeout(storeBaseHfov, 0));
+        panoEl.addEventListener('touchend', () => setTimeout(storeBaseHfov, 0));
+        let wheelT = null;
+        panoEl.addEventListener('wheel', () => {{
+            if (wheelT) clearTimeout(wheelT);
+            wheelT = setTimeout(storeBaseHfov, 120);
+        }}, {{ passive: true }});
+    }}
+
+    // Scene dropdown navigation
+    const navBtn = document.getElementById('sceneNavBtn');
+    const navMenu = document.getElementById('sceneNavMenu');
+    function renderSceneMenu() {{
+        if (!navMenu) return;
+        navMenu.innerHTML = '';
+        const ids = Object.keys(tourConfig.scenes || {{}});
+        ids.forEach((sid, idx) => {{
+            const sc = tourConfig.scenes[sid] || {{}};
+            const item = document.createElement('div');
+            item.className = 'scene-nav-item';
+            item.innerHTML = `<span>${{(sc.title || sid)}}</span><span class="pill">#${{idx + 1}}</span>`;
+            item.addEventListener('click', (ev) => {{
+                ev.preventDefault();
+                ev.stopPropagation();
+                navMenu.style.display = 'none';
+                if (!window.viewer) return;
+                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
+                beginSceneLoading('Loading scene...');
+                transitioning = true;
+                window.viewer.loadScene(sid);
+            }});
+            navMenu.appendChild(item);
+        }});
+    }}
+    function toggleMenu(show) {{
+        if (!navMenu) return;
+        const want = (show === undefined) ? (navMenu.style.display !== 'block') : !!show;
+        if (want) {{
+            renderSceneMenu();
+            navMenu.style.display = 'block';
+        }} else {{
+            navMenu.style.display = 'none';
+        }}
+    }}
+    if (navBtn && navMenu) {{
+        navBtn.addEventListener('click', (ev) => {{
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleMenu();
+        }});
+        document.addEventListener('click', () => toggleMenu(false));
+        document.addEventListener('keydown', (ev) => {{
+            if (ev.key === 'Escape') toggleMenu(false);
+        }});
+    }}
     </script>
 </body>
 </html>"""
