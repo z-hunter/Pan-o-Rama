@@ -47,7 +47,7 @@ app.logger.setLevel(logging.DEBUG)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
-GALLERY_TEMPLATE_VERSION = 2
+GALLERY_TEMPLATE_VERSION = 3
 
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
