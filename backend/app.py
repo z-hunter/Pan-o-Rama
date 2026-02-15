@@ -3724,7 +3724,8 @@ def serve_gallery_files(project_id, filename):
                     # We still regenerate `index.html` so players get current UX; access control is enforced above.
                     generate_tour(project_id, scenes, watermark_enabled=watermark_enabled, force_previews=bool(force_regen))
         except Exception as e:
-            app.logger.warning(f"On-demand gallery regen failed: {e}")
+            # Include traceback; this path is user-facing (gallery open) and must be debuggable.
+            app.logger.warning("On-demand gallery regen failed: %s", e, exc_info=True)
     base_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
     # Avoid stale cached HTML in browsers/in-app webviews (Facebook, etc.).
     # send_from_directory/send_file uses conditional responses and may end up with Cache-Control: no-cache.
