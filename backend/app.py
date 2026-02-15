@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory, send_file, g, redirect
 import os
+import platform
+import time
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ExifTags, ImageOps
@@ -47,7 +49,25 @@ app.logger.setLevel(logging.DEBUG)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
-GALLERY_TEMPLATE_VERSION = 5
+WEB_PANO_FILENAME = "web.jpg"
+GALLERY_TEMPLATE_VERSION = 32
+
+@app.route("/__debug/version")
+def debug_version():
+    # Local debugging helper. Do not return environment variables or secrets.
+    return (
+        jsonify(
+            {
+                "now_unix": int(time.time()),
+                "pid": os.getpid(),
+                "platform": platform.platform(),
+                "cwd": os.getcwd(),
+                "app_py": os.path.abspath(__file__),
+                "gallery_template_version": GALLERY_TEMPLATE_VERSION,
+            }
+        ),
+        200,
+    )
 
 PLAN_FREE = "free"
 PLAN_PRO = "pro"
@@ -779,7 +799,7 @@ def process_image(input_path, output_path, max_size=(16384, 16384), quality=98):
             return True
     except: return False
 
-def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PREVIEW_FILENAME, max_size=(2048, 1024), quality=82):
+def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PREVIEW_FILENAME, max_size=(2048, 1024), quality=82, force=False):
     """
     Create a low-res preview for quick transitions. Stored next to scene assets under processed_galleries.
     Returns preview_filename when successful, else None.
@@ -790,7 +810,7 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
     src_path = os.path.join(proc_dir, source_filename)
     out_path = os.path.join(proc_dir, preview_filename)
     try:
-        if os.path.exists(out_path):
+        if (not force) and os.path.exists(out_path):
             return preview_filename
         if not os.path.exists(src_path):
             return None
@@ -808,15 +828,21 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
             im = ImageOps.exif_transpose(im)
             if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
-            # Force a stable 2:1 preview for equirectangular panos; helps viewers and reduces surprises.
+            # Create a stable 2:1 preview for equirectangular panos WITHOUT cropping (cropping feels like "zoom").
             try:
                 resample = Image.Resampling.LANCZOS
             except Exception:
                 resample = Image.LANCZOS
             try:
-                im = ImageOps.fit(im, max_size, method=resample, centering=(0.5, 0.5))
+                im.thumbnail(max_size, resample)  # preserves full frame
+                canvas = Image.new("RGB", max_size, (0, 0, 0))
+                ox = (max_size[0] - im.width) // 2
+                oy = (max_size[1] - im.height) // 2
+                canvas.paste(im, (ox, oy))
+                im = canvas
             except Exception:
-                im.thumbnail(max_size, resample)
+                # Worst-case fallback: resize (still no crop)
+                im = im.resize(max_size, resample=resample)
             im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
         try:
             Image.MAX_IMAGE_PIXELS = old_max
@@ -825,6 +851,50 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
         return preview_filename
     except Exception as e:
         app.logger.warning(f"Preview generation failed: {e}")
+        return None
+
+def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_PANO_FILENAME, max_size=(8192, 8192), quality=90):
+    """
+    Create a "web-safe" panorama size to avoid extremely large textures that can freeze the browser.
+    Stored next to scene assets under processed_galleries.
+    Returns web_filename when successful, else None.
+    """
+    if not tour_id or not scene_id or not source_filename:
+        return None
+    proc_dir = os.path.join(PROCESSED_FOLDER, tour_id, scene_id)
+    src_path = os.path.join(proc_dir, source_filename)
+    out_path = os.path.join(proc_dir, web_filename)
+    try:
+        if os.path.exists(out_path):
+            return web_filename
+        if not os.path.exists(src_path):
+            return None
+        old_max = getattr(Image, "MAX_IMAGE_PIXELS", None)
+        try:
+            Image.MAX_IMAGE_PIXELS = None
+        except Exception:
+            pass
+        with Image.open(src_path) as im:
+            im = ImageOps.exif_transpose(im)
+            if im.mode in ("RGBA", "P"):
+                im = im.convert("RGB")
+            # If the source is already reasonably sized, don't create a redundant web copy.
+            if im.width <= max_size[0] and im.height <= max_size[1]:
+                return None
+            try:
+                resample = Image.Resampling.LANCZOS
+            except Exception:
+                resample = Image.LANCZOS
+            if im.width > max_size[0] or im.height > max_size[1]:
+                im.thumbnail(max_size, resample)
+            im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
+        try:
+            Image.MAX_IMAGE_PIXELS = old_max
+        except Exception:
+            pass
+        return web_filename
+    except Exception as e:
+        app.logger.warning(f"Web pano generation failed: {e}")
         return None
 
 def now_iso():
@@ -1318,6 +1388,114 @@ def load_tour_scenes_and_hotspots(tour_id):
         s["hotspots"] = grouped.get(r["id"], [])
         scenes.append(s)
     return scenes
+
+def load_disk_metadata_scenes(tour_id):
+    """Fallback for older galleries that exist on disk but not in DB."""
+    try:
+        pdir = os.path.join(app.config["PROCESSED_FOLDER"], tour_id)
+        mpath = os.path.join(pdir, "metadata.json")
+        if not os.path.exists(mpath):
+            return []
+        with open(mpath, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        scenes = meta.get("scenes") or []
+        return scenes if isinstance(scenes, list) else []
+    except Exception:
+        return []
+
+def load_disk_scenes_from_index_html(tour_id):
+    """Parse an existing generated player (index.html) to reconstruct a minimal scene list.
+
+    This is a best-effort compatibility path for galleries that predate the DB-backed tour model.
+    """
+    try:
+        pdir = os.path.join(app.config["PROCESSED_FOLDER"], tour_id)
+        ipath = os.path.join(pdir, "index.html")
+        if not os.path.exists(ipath):
+            return []
+        with open(ipath, "r", encoding="utf-8", errors="ignore") as f:
+            txt = f.read()
+        needle = "const tourConfig ="
+        pos = txt.find(needle)
+        if pos < 0:
+            return []
+        brace_start = txt.find("{", pos)
+        if brace_start < 0:
+            return []
+        # Extract a balanced {...} JSON object. The config is JSON, so braces in strings are unlikely,
+        # but handle strings/escapes anyway.
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(brace_start, len(txt)):
+            c = txt[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        if end < 0:
+            return []
+        cfg = json.loads(txt[brace_start:end])
+        scenes_cfg = (cfg.get("scenes") or {}) if isinstance(cfg, dict) else {}
+        if not isinstance(scenes_cfg, dict) or not scenes_cfg:
+            return []
+        scene_title = {sid: (sc.get("title") if isinstance(sc, dict) else None) for sid, sc in scenes_cfg.items()}
+        out = []
+        for sid, sc in scenes_cfg.items():
+            if not isinstance(sc, dict):
+                continue
+            pano = sc.get("panorama") or ""
+            pano_file = os.path.basename(pano) if isinstance(pano, str) else ""
+            if not pano_file:
+                continue
+            hs_out = []
+            for hs in (sc.get("hotSpots") or []):
+                if not isinstance(hs, dict):
+                    continue
+                args = hs.get("clickHandlerArgs") or {}
+                tgt = args.get("targetSceneId") or args.get("target_id") or ""
+                if not tgt:
+                    continue
+                hs_out.append(
+                    {
+                        "pitch": hs.get("pitch", 0.0),
+                        "yaw": hs.get("yaw", 0.0),
+                        "entry_pitch": args.get("entryPitch", args.get("entry_pitch", 0.0)) or 0.0,
+                        "entry_yaw": args.get("entryYaw", args.get("entry_yaw", 0.0)) or 0.0,
+                        "target_id": tgt,
+                        "target_name": scene_title.get(tgt) or "Scene",
+                        "label": hs.get("text") or "",
+                    }
+                )
+            out.append(
+                {
+                    "id": sid,
+                    "name": sc.get("title") or sid,
+                    "panorama": pano_file,
+                    "images": [pano_file],
+                    "hotspots": hs_out,
+                    "haov": sc.get("haov", 360),
+                    "vaov": sc.get("vaov", 180),
+                    "type": sc.get("type") or "equirectangular",
+                }
+            )
+        return out
+    except Exception:
+        return []
 
 @app.route("/auth/register", methods=["POST"])
 def auth_register():
@@ -2237,15 +2415,40 @@ def add_scene(project_id):
         return jsonify({'scene': s_data}), 200
     except Exception as e: app.logger.error(f"Error: {e}", exc_info=True); return jsonify({'error': str(e)}), 500
 
-def generate_tour(project_id, scenes, watermark_enabled=False):
-    tour_config = {"default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 1000, "autoLoad": True, "autoRotate": -2, "hfov": 70}, "scenes": {}}
+def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=False):
+    # Pannellum's built-in `preview` works best when the scene switch is immediate; otherwise it can
+    # look like the previous scene is "frozen" until full-res is ready.
+    tour_config = {"default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 0, "autoLoad": False, "autoRotate": -2, "hfov": 70}, "scenes": {}}
     for scene in scenes:
         pano_name = scene.get('panorama') or ((scene.get('images') or [None])[0])
         if not pano_name:
             continue
-        panorama_url = f"{scene['id']}/{pano_name}"
-        preview_name = scene.get("preview") or ensure_scene_preview(project_id, scene['id'], pano_name)
+        # Serve a web-safe pano by default to avoid browser freezes on very large textures.
+        # Keep the original hi-res URL available for an optional "HD" user toggle in the player.
+        orig_name = scene.get("hires") or pano_name
+        web_name = scene.get("web") or ensure_scene_web_pano(project_id, scene["id"], orig_name)
+        served_name = web_name or orig_name
+        panorama_url = f"{scene['id']}/{served_name}"
+        hires_url = f"{scene['id']}/{orig_name}" if served_name != orig_name else None
+        preview_name = scene.get("preview") or ensure_scene_preview(project_id, scene['id'], orig_name, force=bool(force_previews))
         preview_url = f"{scene['id']}/{preview_name}" if preview_name else None
+        # Provide widths so the player can slightly zoom preview to hide low-res blur without a "jump".
+        pano_w = None
+        preview_w = None
+        try:
+            proc_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id, scene['id'])
+            pano_path = os.path.join(proc_dir, served_name)
+            if os.path.exists(pano_path):
+                with Image.open(pano_path) as im:
+                    pano_w = int(im.width)
+            if preview_name:
+                prev_path = os.path.join(proc_dir, preview_name)
+                if os.path.exists(prev_path):
+                    with Image.open(prev_path) as im:
+                        preview_w = int(im.width)
+        except Exception:
+            pano_w = pano_w
+            preview_w = preview_w
         hotspots = []
         for hs in scene.get('hotspots', []):
             hotspots.append({
@@ -2273,8 +2476,14 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             "minHfov": 30,
             "maxHfov": 120
         }
+        if hires_url:
+            cfg["hires"] = hires_url
         if preview_url:
             cfg["preview"] = preview_url
+        if pano_w:
+            cfg["pano_w"] = pano_w
+        if preview_w:
+            cfg["preview_w"] = preview_w
         tour_config["scenes"][scene['id']] = cfg
     config_json = json.dumps(tour_config, indent=4)
     watermark_html = '<div class="wm-badge">Created with Pan-o-Rama Free</div>' if watermark_enabled else ""
@@ -2285,22 +2494,33 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
     <meta name="lokalny_obiektyw_gallery_template" content="v{GALLERY_TEMPLATE_VERSION}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <style>
-        body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
-        #panorama {{ width: 100vw; height: 100vh; background: #0b0b0b; }}
-        .custom-hotspot {{ height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }}
-        .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
-        .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
-        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
-        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; pointer-events: none; }}
+	    <style>
+	        body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
+	        #panorama {{ width: 100vw; height: 100vh; background: #0b0b0b; }}
+	        .custom-hotspot {{ height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }}
+	        .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
+	        .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
+	        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
+	        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; pointer-events: none; }}
+	        /* When a low-res preview is visible, avoid a full-screen dimmer: show a small non-blocking HUD instead. */
+	        .loading-overlay.preview-mode {{ background: transparent; align-items: flex-end; justify-content: center; padding: 0 0 18px 0; }}
+	        .loading-overlay.preview-mode .loading-progress {{ width: min(420px, 72vw); margin-top: 8px; }}
+	        .loading-overlay.preview-mode .loading-title {{ font-size: 13px; color: rgba(219,234,255,0.95); text-shadow: 0 2px 12px rgba(0,0,0,0.6); }}
+	        .loading-overlay.preview-mode .loading-progress .bar {{ height: 8px; background: rgba(0,0,0,0.25); }}
+	        .loading-overlay.preview-mode .loading-progress .pct {{ display: none; }}
         .loading-title {{ font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; }}
         .loading-progress {{ width: min(520px, 78vw); margin-top: 12px; }}
         .loading-progress .bar {{ height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }}
         .loading-progress .fill {{ height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }}
         .loading-progress .pct {{ margin-top: 8px; font: 600 13px/1.2 'Segoe UI', sans-serif; color: #bcd7ff; text-align: center; }}
-        .scene-nav {{ position: fixed; top: 14px; right: 14px; z-index: 9999; pointer-events: auto; }}
-        .scene-nav-btn {{ width: 44px; height: 44px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.55); color: #e6f1ff; font: 800 18px/1 'Segoe UI', sans-serif; cursor: pointer; }}
+	        .scene-nav {{ position: fixed; top: 14px; right: 14px; z-index: 9999; pointer-events: auto; }}
+	        .quality-nav {{ position: fixed; left: 14px; bottom: 14px; z-index: 9999; pointer-events: auto; }}
+        .scene-nav-btn {{ width: 56px; height: 44px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.55); color: #e6f1ff; font: 800 14px/1 'Segoe UI', sans-serif; cursor: pointer; letter-spacing: 0.4px; }}
+        .scene-nav-btn.compact {{ width: 44px; }}
         .scene-nav-btn:hover {{ background: rgba(0,0,0,0.7); border-color: rgba(77,163,255,0.55); }}
+        .scene-nav-btn svg {{ width: 22px; height: 22px; }}
+        .scene-nav-btn svg path {{ fill: rgba(230,241,255,0.92); }}
+        .scene-nav-btn svg circle {{ fill: rgba(10,10,10,0.55); }}
         .scene-nav-menu {{ position: absolute; top: 52px; right: 0; width: min(320px, 78vw); max-height: 50vh; overflow: auto; display: none; background: rgba(10,10,10,0.9); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }}
         .scene-nav-item {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px; border-radius: 10px; cursor: pointer; color: #d8e8ff; font: 600 14px/1.2 'Segoe UI', sans-serif; }}
         .scene-nav-item:hover {{ background: rgba(77,163,255,0.16); }}
@@ -2308,12 +2528,20 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
         .wm-badge {{ position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }}
     </style>
 </head>
-<body>
-    <div id="panorama"></div>
-    <div class="scene-nav" id="sceneNav">
-        <button class="scene-nav-btn" id="sceneNavBtn" type="button" aria-label="Scenes">S</button>
-        <div class="scene-nav-menu" id="sceneNavMenu"></div>
-    </div>
+	<body>
+		    <div id="panorama"></div>
+		    <div class="quality-nav" id="qualityNav" style="display:none">
+	        <button class="scene-nav-btn compact" id="qualityBtn" type="button" aria-label="Quality">Web</button>
+	    </div>
+		    <div class="scene-nav" id="sceneNav">
+	        <button class="scene-nav-btn compact" id="sceneNavBtn" type="button" aria-label="Points of Interest">
+	            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+	                <path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z"></path>
+	                <circle cx="12" cy="10" r="2.6"></circle>
+	            </svg>
+	        </button>
+	        <div class="scene-nav-menu" id="sceneNavMenu"></div>
+	    </div>
     <div class="loading-overlay" id="tourLoader">
         <div class="loading-title" id="tourLoaderText">Loading scene...</div>
         <div class="loading-progress">
@@ -2321,63 +2549,258 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
             <div class="pct" id="tourLoaderPct">0%</div>
         </div>
     </div>
-    {watermark_html}
-	    <script>
-	    const prefetchCache = new Set();
-	    const prefetchPromises = new Map(); // sceneId -> Promise
-	    const prefetchQueue = [];
-	    const PREFETCH_CONCURRENCY = 2;
-	    let prefetchInflight = 0;
-	    let loadTimer = null;
-	    let loadPct = 0;
-	    let transitioning = false;
-	    let pendingRestore = null; // {{ sceneId, hfov }}
-	    const sceneState = {{}}; // sceneId -> {{ hfov }}
-	    let loaderShowTimer = null;
-	    let perfWatchTimer = null;
-	    let perfWatchUrl = null;
+	    {watermark_html}
+		    <script>
+		    try {{
+		        console.log('[tour] template', 'v{GALLERY_TEMPLATE_VERSION}');
+		    }} catch (_) {{}}
+		    const DEBUG = (() => {{
+		        try {{
+		            const sp = new URLSearchParams(location.search);
+		            return sp.get('debug') === '1' || sp.get('debug') === 'true';
+		        }} catch (_) {{ return false; }}
+		    }})();
+		    function dbg(msg) {{
+		        if (!DEBUG) return;
+		        try {{
+		            console.log('[tour]', `[${{new Date().toISOString().slice(11, 19)}}]`, msg);
+		        }} catch (_) {{}}
+		    }}
 
-	    function prefetchUrl(url) {{
-	        // Warm HTTP cache + best-effort decode to reduce perceived load time.
-	        return fetch(url, {{ cache: 'force-cache' }})
-	            .then(r => r.ok ? r.blob() : null)
-	            .then(b => {{
-	                if (!b) return;
-	                if (typeof createImageBitmap === 'function') {{
-	                    return createImageBitmap(b)
-	                        .then(bm => {{ try {{ bm.close(); }} catch (_) {{}} }})
-	                        .catch(() => {{}});
-	                }}
-	            }})
-	            .catch(() => {{}});
-	    }}
+			    const prefetchCache = new Set();
+			    const prefetchPromises = new Map(); // sceneId -> Promise
+			    const fullReady = new Set(); // base sceneId -> boolean
+			    const prefetchState = new Map(); // base sceneId -> 'pending' | 'ok' | 'error'
+			    const prefetchQueue = [];
+			    const PREFETCH_CONCURRENCY = 1;
+			    let prefetchInflight = 0;
+			    let lastUserInputAt = Date.now();
+			    let userInteracting = false;
+			    const hiresMap = {{}}; // base sceneId -> hires url (if available)
+			    const QUALITY_STANDARD = 'standard'; // web.jpg or original if no web
+			    const QUALITY_ULTRA = 'ultra'; // original hi-res (opt-in, may be slow)
+			    let qualityMode = QUALITY_STANDARD;
+			    // Do not change HFOV for preview: any "compensation" is perceived as a scale jump.
+			    const PREVIEW_ZOOM_MAX = 1.0;
+		    let loadTimer = null;
+		    let loadPct = 0;
+		    let transitioning = false;
+		    let pendingRestore = null; // {{ sceneId, hfov }}
+		    const sceneState = {{}}; // sceneId -> {{ hfov }}
+		    let loaderShowTimer = null;
+		    let loaderPreviewMode = false;
+		    let loaderWatchdogTimer = null;
+		    let activeSceneLoadToken = 0;
+		    const previewMap = {{}}; // sceneId -> preview url (kept out of Pannellum config)
+			    let activeLoadTarget = null; // base sceneId we're waiting full-res for
+			    let loaderActive = false;
+			    let switchState = 'idle'; // idle|loading_preview|preview_ready|loading_full
+			    // switchReq fields: baseId, previewId, pitch, yaw, hfov, prefetchP, token, previewLoadedAt
+			    let switchReq = null;
+			    // We synthesize dedicated preview scenes (id: baseId + '__preview') so switching is immediate and interactive.
 
-	    function pumpPrefetch() {{
-	        while (prefetchInflight < PREFETCH_CONCURRENCY && prefetchQueue.length) {{
-	            const sceneId = prefetchQueue.shift();
-	            const scene = tourConfig.scenes[sceneId];
-	            if (!scene || !scene.panorama) continue;
-	            prefetchInflight++;
-	            const p = prefetchUrl(scene.panorama).finally(() => {{
-	                prefetchInflight--;
-	                pumpPrefetch();
-	            }});
-	            prefetchPromises.set(sceneId, p);
-	        }}
-	    }}
+			    function isPreviewSceneId(sceneId) {{
+			        return !!sceneId && sceneId.endsWith('__preview');
+			    }}
+			    function isHiresSceneId(sceneId) {{
+			        return !!sceneId && sceneId.endsWith('__hires');
+			    }}
+			    function baseSceneId(sceneId) {{
+			        if (isPreviewSceneId(sceneId)) return sceneId.slice(0, -9);
+			        if (isHiresSceneId(sceneId)) return sceneId.slice(0, -7);
+			        return sceneId;
+			    }}
+			    function previewSceneId(sceneId) {{
+			        return `${{sceneId}}__preview`;
+			    }}
+			    function hiresSceneId(sceneId) {{
+			        return `${{sceneId}}__hires`;
+			    }}
 
-	    function setLoader(show, text) {{
-	        const el = document.getElementById('tourLoader');
-	        const t = document.getElementById('tourLoaderText');
-	        if (t && text) t.textContent = text;
-	        if (!el) return;
-	        el.style.display = show ? 'flex' : 'none';
-	        if (!show) {{
-	            if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
-	            loadPct = 0;
-	            setLoaderProgress(0);
-	        }}
-	    }}
+			    function previewCompensatedHfov(_baseId, hfov) {{ return hfov; }}
+
+				    async function prefetchUrl(url) {{
+				        // Warm the browser cache in the background.
+				        // Important: avoid blob/image-bitmap decoding here; it can create huge memory spikes
+				        // and trigger "page unresponsive" warnings on large panoramas.
+				        try {{
+				            const ctrl = new AbortController();
+				            const t = setTimeout(() => {{ try {{ ctrl.abort(); }} catch (_) {{}} }}, 60000);
+				            const r = await fetch(url, {{ cache: 'force-cache', signal: ctrl.signal }});
+				            clearTimeout(t);
+				            if (!r || !r.ok) {{
+				                dbg(`prefetch fetch not ok url=${{url}} status=${{r ? r.status : '(noresp)'}}`);
+				                return false;
+				            }}
+				            try {{
+				                if (r.body && r.body.getReader) {{
+				                    const reader = r.body.getReader();
+				                    while (true) {{
+				                        const {{ done }} = await reader.read();
+				                        if (done) break;
+				                    }}
+				                }} else {{
+				                    await r.arrayBuffer();
+				                }}
+				                return true;
+				            }} catch (e) {{
+				                dbg(`prefetch drain error url=${{url}} err=${{(e && e.message) ? e.message : e}}`);
+				                return false;
+				            }}
+				        }} catch (e) {{
+				            dbg(`prefetch fetch error url=${{url}} err=${{(e && e.message) ? e.message : e}}`);
+				            return false;
+				        }}
+				    }}
+
+			    function pumpPrefetch() {{
+			        while (prefetchInflight < PREFETCH_CONCURRENCY && prefetchQueue.length) {{
+			            const sceneId = prefetchQueue.shift();
+			            const scene = tourConfig.scenes[sceneId];
+			            if (!scene || !scene.panorama) continue;
+			            prefetchInflight++;
+			            prefetchState.set(sceneId, 'pending');
+			            const p = prefetchUrl(scene.panorama).then((ok) => {{
+			                if (ok) {{
+			                    fullReady.add(baseSceneId(sceneId));
+			                    prefetchState.set(sceneId, 'ok');
+			                }} else {{
+			                    fullReady.delete(baseSceneId(sceneId));
+			                    prefetchState.set(sceneId, 'error');
+			                }}
+			                return !!ok;
+			            }}).finally(() => {{
+			                prefetchInflight--;
+			                pumpPrefetch();
+			            }});
+			            prefetchPromises.set(sceneId, p);
+			        }}
+			    }}
+
+		    function ensureFullPrefetch(baseId) {{
+		        const st = prefetchState.get(baseId);
+		        if (st === 'ok' || st === 'pending') return prefetchPromises.get(baseId) || Promise.resolve(true);
+		        const scene = (tourConfig && tourConfig.scenes) ? tourConfig.scenes[baseId] : null;
+		        if (!scene || !scene.panorama) return Promise.resolve(false);
+		        if (!prefetchPromises.has(baseId)) {{
+		            prefetchQueue.push(baseId);
+		            pumpPrefetch();
+		        }}
+		        return prefetchPromises.get(baseId) || Promise.resolve(false);
+		    }}
+
+			    function requestSwitch(targetSceneId, entryPitch, entryYaw, hfov) {{
+			        const baseId = baseSceneId(targetSceneId);
+			        if (!baseId || !window.viewer) return;
+		        if (switchState !== 'idle') {{
+		            dbg(`switch ignored (busy): ${{switchState}} -> ${{baseId}}`);
+		            return;
+		        }}
+			        const previewId = previewSceneId(baseId);
+			        const havePreview = !!(tourConfig && tourConfig.scenes && tourConfig.scenes[previewId]);
+			        const myTok = (activeSceneLoadToken + 1); // optimistic token before beginSceneLoadingSmart bumps it
+			        const hfovForPreview = (havePreview && typeof hfov === 'number') ? previewCompensatedHfov(baseId, hfov) : hfov;
+			        switchReq = {{ baseId: baseId, previewId: previewId, pitch: entryPitch, yaw: entryYaw, hfov: hfovForPreview, prefetchP: null, token: myTok, previewLoadedAt: 0 }};
+			        activeLoadTarget = baseId;
+			        switchState = havePreview ? 'loading_preview' : 'loading_full';
+		        dbg(`switch target=${{baseId}} havePreview=${{havePreview}} state=${{prefetchState.get(baseId) || '(none)'}}`);
+
+		        const delay = havePreview ? 1800 : 420;
+		        beginSceneLoadingSmart(baseId, havePreview ? 'Loading HD...' : 'Loading scene...', {{
+		            delayMs: delay,
+		            allowPreview: havePreview
+		        }});
+
+		        try {{ switchReq.prefetchP = ensureFullPrefetch(baseId); }} catch (_) {{ switchReq.prefetchP = Promise.resolve(false); }}
+
+			        if (havePreview) {{
+			            dbg(`switch: load preview -> ${{previewId}}`);
+			            safeLoadSceneWithView(previewId, entryPitch, entryYaw, hfovForPreview);
+			        }} else {{
+			            dbg(`switch: load full -> ${{baseId}}`);
+			            safeLoadSceneWithView(baseId, entryPitch, entryYaw, hfov);
+			        }}
+			    }}
+
+			    function maybeStartFullAfterPreview() {{
+			        if (!switchReq || switchState !== 'preview_ready') return;
+			        const baseId = switchReq.baseId;
+			        const previewId = switchReq.previewId;
+			        const p = switchReq.prefetchP || Promise.resolve(false);
+			        const previewAt = switchReq.previewLoadedAt || Date.now();
+
+			        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+			        const timeout = (ms) => new Promise((r) => setTimeout(() => r('timeout'), ms));
+			        const raf2 = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+			        const waitForIdle = async (idleMs, maxWaitMs) => {{
+			            const start = Date.now();
+			            while (true) {{
+			                if (!switchReq || switchState !== 'preview_ready') return false;
+			                if (!window.viewer || !window.viewer.getScene) return false;
+			                if (window.viewer.getScene() !== previewId) return false;
+			                const since = Date.now() - (lastUserInputAt || 0);
+			                const ok = (!userInteracting) && (since >= idleMs);
+			                if (ok) return true;
+			                if ((Date.now() - start) >= maxWaitMs) return true; // force eventually
+			                await sleep(120);
+			            }}
+			        }};
+
+			        // Keep preview interactive while HD warms up. Starting loadScene(full) too early causes
+			        // a black canvas during the full-res download/decode.
+			        const MAX_WAIT_MS = 25000;
+			        const MIN_PREVIEW_DWELL_MS = 450;
+			        const IDLE_UPGRADE_MS = 800;
+
+			        Promise.race([p.then((ok) => ok ? 'ok' : 'error'), timeout(MAX_WAIT_MS)]).then((res) => {{
+			            try {{
+			                if (!switchReq || switchState !== 'preview_ready') return;
+			                if (!window.viewer || !window.viewer.getScene) return;
+			                if (window.viewer.getScene() !== previewId) return;
+
+			                const dwell = Date.now() - previewAt;
+			                const extra = Math.max(0, MIN_PREVIEW_DWELL_MS - dwell);
+			                dbg(`switch: prefetch result=${{res}} dwellMs=${{dwell}} extraWaitMs=${{extra}}`);
+
+			                // Preserve the user's current view while waiting in preview (feels seamless).
+			                const curPitch = (typeof window.viewer.getPitch === 'function') ? window.viewer.getPitch() : switchReq.pitch;
+			                const curYaw = (typeof window.viewer.getYaw === 'function') ? window.viewer.getYaw() : switchReq.yaw;
+			                const curHfov = (typeof window.viewer.getHfov === 'function') ? window.viewer.getHfov() : switchReq.hfov;
+			                switchReq.pitch = curPitch;
+			                switchReq.yaw = curYaw;
+			                switchReq.hfov = curHfov;
+
+			                // Even if prefetch failed/timed out, we eventually need to try loading full.
+			                Promise.resolve()
+			                    .then(() => extra ? sleep(extra) : null)
+			                    .then(() => raf2())
+			                    .then(() => waitForIdle(IDLE_UPGRADE_MS, 15000))
+			                    .then(() => {{
+			                        if (!switchReq || switchState !== 'preview_ready') return;
+			                        if (!window.viewer || !window.viewer.getScene) return;
+			                        if (window.viewer.getScene() !== previewId) return;
+			                        switchState = 'loading_full';
+			                        dbg(`switch: load full after preview -> ${{baseId}}`);
+			                        safeLoadSceneWithView(baseId, curPitch, curYaw, curHfov);
+			                    }});
+			            }} catch (_) {{}}
+			        }});
+			    }}
+
+		    function setLoader(show, text) {{
+		        const el = document.getElementById('tourLoader');
+		        const t = document.getElementById('tourLoaderText');
+		        if (t && text) t.textContent = text;
+		        if (!el) return;
+		        if (loaderPreviewMode) el.classList.add('preview-mode');
+		        else el.classList.remove('preview-mode');
+		        el.style.display = show ? 'flex' : 'none';
+		        if (!show) {{
+		            if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+		            loadPct = 0;
+		            setLoaderProgress(0);
+		        }}
+		    }}
 
     function setLoaderProgress(pct) {{
         const bar = document.getElementById('tourLoaderBar');
@@ -2399,205 +2822,420 @@ def generate_tour(project_id, scenes, watermark_enabled=False):
 	        }}, 160);
 	    }}
 
-	    function beginSceneLoadingSmart(sceneId, text, opts) {{
+		    function beginSceneLoadingSmart(sceneId, text, opts) {{
 	        // Show loader only if load takes "long enough" to be noticeable.
 	        // Never fully suppress: even with previews, full-res may still take long and looks like a hang.
-	        const o = opts || {{}};
-	        const delayMs = (typeof o.delayMs === 'number') ? o.delayMs : 420;
-	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
-	        // Reset visuals but don't show yet.
-	        setLoader(false);
-	        loadPct = 0;
-	        setLoaderProgress(0);
-	        // Reset resource-timing watcher.
-	        if (perfWatchTimer) {{ clearInterval(perfWatchTimer); perfWatchTimer = null; }}
-	        perfWatchUrl = null;
-	        try {{
-	            const sc = (sceneId && tourConfig && tourConfig.scenes) ? tourConfig.scenes[sceneId] : null;
-	            if (sc && sc.panorama) perfWatchUrl = sc.panorama;
-	        }} catch (_) {{}}
-	        loaderShowTimer = setTimeout(() => {{
-	            setLoader(true, text || 'Loading scene...');
-	            startFakeProgress();
-	        }}, delayMs);
+		        const o = opts || {{}};
+		        const delayMs = (typeof o.delayMs === 'number') ? o.delayMs : 420;
+		        const allowPreview = (typeof o.allowPreview === 'boolean') ? o.allowPreview : true;
+		        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
+		        if (loaderWatchdogTimer) {{ clearTimeout(loaderWatchdogTimer); loaderWatchdogTimer = null; }}
+		        activeSceneLoadToken++;
+		        const myToken = activeSceneLoadToken;
+		        // Reset visuals but don't show yet.
+		        loaderActive = true;
+		        setLoader(false);
+		        loadPct = 0;
+		        setLoaderProgress(0);
+		        loaderPreviewMode = !!(allowPreview && sceneId && previewMap[sceneId]);
+		        dbg(`begin-load scene=${{sceneId || '(unknown)'}} delayMs=${{delayMs}} allowPreview=${{allowPreview}} previewMode=${{loaderPreviewMode}} token=${{myToken}}`);
+		        loaderShowTimer = setTimeout(() => {{
+		            if (myToken !== activeSceneLoadToken) return;
+		            // If the load finished quickly, 'load' handler may have cleared this already.
+		            loaderShowTimer = null;
+		            setLoader(true, text || 'Loading scene...');
+		            startFakeProgress();
+		            dbg(`loader shown (delay=${{delayMs}}ms)`);
+		        }}, delayMs);
 
-	        // Use PerformanceResourceTiming when available to detect when the full-res panorama URL finished loading.
-	        // Pannellum's 'load' can fire early (e.g., after preview), which makes the UI look stuck.
-	        if (perfWatchUrl && typeof performance !== 'undefined' && performance.getEntriesByName) {{
-	            perfWatchTimer = setInterval(() => {{
-	                try {{
-	                    const entries = performance.getEntriesByName(perfWatchUrl);
-	                    if (entries && entries.length) {{
-	                        const e = entries[entries.length - 1];
-	                        if (e && e.responseEnd && e.responseEnd > 0) {{
-	                            endSceneLoading();
-	                        }}
-	                    }}
-	                }} catch (_) {{}}
-	            }}, 120);
-	        }}
-	    }}
+		        // Absolute safety net: never keep a loader alive forever (bad caches / missing timings).
+		        // Full-res can legitimately take a long time on slow devices / huge panos, so be generous.
+		        const watchdogMs = allowPreview ? 60000 : 30000;
+		        loaderWatchdogTimer = setTimeout(() => {{
+		            if (myToken !== activeSceneLoadToken) return;
+		            dbg('watchdog: forcing endSceneLoading()');
+		            endSceneLoading();
+		        }}, watchdogMs);
+		    }}
 
 	    function beginSceneLoading(text) {{
 	        beginSceneLoadingSmart(null, text);
 	    }}
 
-	    function endSceneLoading() {{
-	        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
-	        if (perfWatchTimer) {{ clearInterval(perfWatchTimer); perfWatchTimer = null; }}
-	        perfWatchUrl = null;
-	        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
-	        loadPct = 100;
-	        setLoaderProgress(100);
-	        setTimeout(() => setLoader(false), 120);
-	    }}
+		    function endSceneLoading() {{
+		        if (!loaderActive) return;
+		        loaderActive = false;
+		        if (loaderShowTimer) {{ clearTimeout(loaderShowTimer); loaderShowTimer = null; }}
+		        if (loaderWatchdogTimer) {{ clearTimeout(loaderWatchdogTimer); loaderWatchdogTimer = null; }}
+		        if (loadTimer) {{ clearInterval(loadTimer); loadTimer = null; }}
+		        loadPct = 100;
+		        setLoaderProgress(100);
+		        setTimeout(() => setLoader(false), 120);
+		        dbg('end-load');
+		    }}
 
     function defaultHfov() {{
         return (tourConfig.default && typeof tourConfig.default.hfov === 'number') ? tourConfig.default.hfov : 70;
     }}
 
-    function storeBaseHfov() {{
-        if (!window.viewer || transitioning) return;
-        const sid = window.viewer.getScene();
-        if (!sid) return;
-        sceneState[sid] = {{ hfov: window.viewer.getHfov() }};
-    }}
-
-	    function prefetchScene(sceneId) {{
-	        if (!sceneId || prefetchCache.has(sceneId)) return;
-	        const scene = tourConfig.scenes[sceneId];
-	        if (!scene || !scene.panorama) return;
-	        if (scene.preview) {{
-	            const img = new Image();
-	            img.src = scene.preview;
-	        }}
-	        if (!prefetchPromises.has(sceneId)) {{
-	            prefetchQueue.push(sceneId);
-	            pumpPrefetch();
-	        }}
-	        prefetchCache.add(sceneId);
+	    function storeBaseHfov() {{
+	        if (!window.viewer || transitioning) return;
+	        const sid = baseSceneId(window.viewer.getScene());
+	        if (!sid) return;
+	        sceneState[sid] = {{ hfov: window.viewer.getHfov() }};
 	    }}
-    function prefetchLinkedScenes(sceneId) {{
-        const scene = tourConfig.scenes[sceneId];
-        if (!scene || !scene.hotSpots) return;
-        scene.hotSpots.forEach(hs => prefetchScene(hs.clickHandlerArgs.targetSceneId));
-    }}
 
-	    function smoothSwitch(e, args) {{
-	        const viewer = window.viewer;
-	        const fromScene = viewer.getScene();
-	        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
-	        const zoomTarget = Math.max(30, baseFrom - 40);
-	        const targetSceneId = args.targetSceneId;
-	        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
-	        pendingRestore = {{ sceneId: targetSceneId, hfov: baseTarget }};
-	        transitioning = true;
-	        beginSceneLoadingSmart(targetSceneId, 'Loading scene...');
-	        viewer.setHfov(zoomTarget, 800);
-	        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
-        // Start scene switch while zoom animation is still running for a smoother transition.
-        setTimeout(() => {{
-            viewer.loadScene(targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
-        }}, 260);
-    }}
-    const tourConfig = {config_json};
-    Object.values(tourConfig.scenes).forEach(scene => {{
-        if (scene.hotSpots) {{
-            scene.hotSpots.forEach(hs => {{
-                if (hs.clickHandlerFunc === "smoothSwitch") hs.clickHandlerFunc = smoothSwitch;
-            }});
-        }}
-	    }});
-	    // Avoid Pannellum's "flat preview" feeling on the very first load: use full-res directly for first scene.
-	    try {{
-	        const fs = tourConfig.default && tourConfig.default.firstScene;
-	        if (fs && tourConfig.scenes && tourConfig.scenes[fs]) delete tourConfig.scenes[fs].preview;
-	    }} catch (_) {{}}
+		    function prefetchScene(sceneId) {{
+		        if (!sceneId) return;
+		        const baseId = baseSceneId(sceneId);
+		        const st = prefetchState.get(baseId);
+		        if (st === 'ok' || st === 'pending' || prefetchCache.has(baseId)) return;
+		        const scene = tourConfig.scenes[baseId];
+		        if (!scene || !scene.panorama) return;
+		        if (previewMap[baseId]) {{
+		            const img = new Image();
+		            img.src = previewMap[baseId];
+		            dbg(`prefetch preview ${{baseId}}`);
+		        }}
+		        if (!prefetchPromises.has(baseId)) {{
+		            prefetchQueue.push(baseId);
+		            pumpPrefetch();
+		            dbg(`prefetch full queued ${{baseId}}`);
+		        }}
+		        prefetchCache.add(baseId);
+		    }}
+	    function prefetchLinkedScenes(sceneId) {{
+	        const scene = tourConfig.scenes[baseSceneId(sceneId)];
+	        if (!scene || !scene.hotSpots) return;
+	        scene.hotSpots.forEach(hs => prefetchScene(hs.clickHandlerArgs.targetSceneId));
+	    }}
 
-	    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...', {{ delayMs: 0 }});
-	    window.viewer = pannellum.viewer('panorama', tourConfig);
-	    prefetchLinkedScenes(tourConfig.default.firstScene);
-	    window.viewer.on('scenechange', (sceneId) => {{
-	        prefetchLinkedScenes(sceneId);
-	        // If user navigates via built-in APIs, ensure loader appears.
-	        beginSceneLoadingSmart(sceneId, 'Loading scene...', {{ delayMs: 420 }});
-	    }});
-	    window.viewer.on('load', () => {{
-	        try {{
-            const sid = window.viewer.getScene();
-            let target = defaultHfov();
-            if (pendingRestore && pendingRestore.sceneId === sid) {{
-                target = pendingRestore.hfov;
-                pendingRestore = null;
-            }} else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {{
-                target = sceneState[sid].hfov;
-            }}
-            sceneState[sid] = {{ hfov: target }};
-            window.viewer.setHfov(target, 0);
-	        }} catch (_) {{}}
-	        transitioning = false;
-	        // Keep endSceneLoading primarily driven by resource timing watcher; but ensure we never get stuck.
-	        setTimeout(() => endSceneLoading(), 800);
-	    }});
+		    function safeLoadScene(sceneId, pitch, yaw, hfov, fadeMs) {{
+		        try {{
+		            const args = [sceneId];
+		            // Only pass view params when at least one is a number; otherwise keep default view.
+		            // Passing (undefined, undefined, undefined, 0) can behave inconsistently across browsers.
+		            if (typeof pitch === 'number' || typeof yaw === 'number' || typeof hfov === 'number') {{
+		                args.push(pitch, yaw, hfov);
+		                if (typeof fadeMs === 'number') args.push(fadeMs);
+		            }}
+		            window.viewer.loadScene.apply(window.viewer, args);
+		        }} catch (_) {{}}
+		    }}
 
-    // Track user zoom so we don't "lock" them to one hfov.
-    const panoEl = document.getElementById('panorama');
-    if (panoEl) {{
-        panoEl.addEventListener('mouseup', () => setTimeout(storeBaseHfov, 0));
-        panoEl.addEventListener('touchend', () => setTimeout(storeBaseHfov, 0));
-        let wheelT = null;
-        panoEl.addEventListener('wheel', () => {{
-            if (wheelT) clearTimeout(wheelT);
-            wheelT = setTimeout(storeBaseHfov, 120);
-        }}, {{ passive: true }});
-    }}
+			    function safeLoadSceneWithView(sceneId, pitch, yaw, hfov) {{
+			        if (typeof pitch === 'number' || typeof yaw === 'number' || typeof hfov === 'number') {{
+			            safeLoadScene(sceneId, pitch, yaw, hfov, 0);
+			        }} else {{
+			            safeLoadScene(sceneId);
+			        }}
+			    }}
 
-    // Scene dropdown navigation
-    const navBtn = document.getElementById('sceneNavBtn');
-    const navMenu = document.getElementById('sceneNavMenu');
-	    function renderSceneMenu() {{
-        if (!navMenu) return;
-        navMenu.innerHTML = '';
-        const ids = Object.keys(tourConfig.scenes || {{}});
-        ids.forEach((sid, idx) => {{
-            const sc = tourConfig.scenes[sid] || {{}};
-            const item = document.createElement('div');
-            item.className = 'scene-nav-item';
-            item.innerHTML = `<span>${{(sc.title || sid)}}</span><span class="pill">#${{idx + 1}}</span>`;
-	            item.addEventListener('click', (ev) => {{
-                ev.preventDefault();
-                ev.stopPropagation();
-                navMenu.style.display = 'none';
-                if (!window.viewer) return;
-	                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
-	                beginSceneLoadingSmart(sid, 'Loading scene...', {{ delayMs: 420 }});
-	                transitioning = true;
-	                window.viewer.loadScene(sid);
-	            }});
-            navMenu.appendChild(item);
-        }});
-    }}
-    function toggleMenu(show) {{
-        if (!navMenu) return;
-        const want = (show === undefined) ? (navMenu.style.display !== 'block') : !!show;
-        if (want) {{
-            renderSceneMenu();
-            navMenu.style.display = 'block';
-        }} else {{
-            navMenu.style.display = 'none';
-        }}
-    }}
-    if (navBtn && navMenu) {{
-        navBtn.addEventListener('click', (ev) => {{
-            ev.preventDefault();
-            ev.stopPropagation();
-            toggleMenu();
-        }});
-        document.addEventListener('click', () => toggleMenu(false));
-        document.addEventListener('keydown', (ev) => {{
-            if (ev.key === 'Escape') toggleMenu(false);
-        }});
-    }}
+			    function getCurrentView() {{
+			        try {{
+			            const v = window.viewer;
+			            if (!v) return {{}};
+			            return {{
+			                pitch: (typeof v.getPitch === 'function') ? v.getPitch() : undefined,
+			                yaw: (typeof v.getYaw === 'function') ? v.getYaw() : undefined,
+			                hfov: (typeof v.getHfov === 'function') ? v.getHfov() : undefined,
+			            }};
+			        }} catch (_) {{
+			            return {{}};
+			        }}
+			    }}
+
+			    function applyQualityMode(mode) {{
+			        qualityMode = (mode === QUALITY_ULTRA) ? QUALITY_ULTRA : QUALITY_STANDARD;
+			        try {{ localStorage.setItem('tourQualityMode', qualityMode); }} catch (_) {{}}
+			        dbg(`quality: set mode=${{qualityMode}}`);
+			        // If switching down to standard while on a hires scene, return to base.
+			        try {{
+			            if (!window.viewer) return;
+			            const cur = window.viewer.getScene();
+			            if (qualityMode === QUALITY_STANDARD && isHiresSceneId(cur)) {{
+			                const baseId = baseSceneId(cur);
+			                const view = getCurrentView();
+			                beginSceneLoadingSmart(baseId, 'Switching quality...', {{ delayMs: 0, allowPreview: true }});
+			                safeLoadSceneWithView(baseId, view.pitch, view.yaw, view.hfov);
+			            }}
+			        }} catch (_) {{}}
+			    }}
+
+			    function maybeUpgradeToUltra() {{
+			        try {{
+			            if (qualityMode !== QUALITY_ULTRA) return;
+			            if (!window.viewer) return;
+			            if (switchState !== 'idle') return; // don't interfere with scene switching
+			            const cur = window.viewer.getScene();
+			            if (!cur) return;
+			            if (isPreviewSceneId(cur)) return;
+			            if (isHiresSceneId(cur)) return; // already ultra
+			            const baseId = baseSceneId(cur);
+			            if (!hiresMap[baseId]) {{
+			                dbg(`quality: no hires for ${{baseId}}`);
+			                return;
+			            }}
+			            const view = getCurrentView();
+			            // Only start the heavy upgrade when user is idle (avoid freezing mid-interaction).
+			            const since = Date.now() - (lastUserInputAt || 0);
+			            if (userInteracting || since < 800) {{
+			                setTimeout(maybeUpgradeToUltra, 250);
+			                return;
+			            }}
+				            dbg(`quality: upgrading to hd for ${{baseId}}`);
+				            beginSceneLoadingSmart(baseId, 'Loading HD...', {{ delayMs: 650, allowPreview: true }});
+				            safeLoadSceneWithView(hiresSceneId(baseId), view.pitch, view.yaw, view.hfov);
+				        }} catch (_) {{}}
+				    }}
+
+				    function loadTargetWithPreview(targetSceneId, entryPitch, entryYaw, hfov) {{
+				        requestSwitch(targetSceneId, entryPitch, entryYaw, hfov);
+				    }}
+
+			    function smoothSwitch(e, args) {{
+			        const viewer = window.viewer;
+			        const fromScene = baseSceneId(viewer.getScene());
+			        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
+			        const zoomTarget = Math.max(30, baseFrom - 40);
+			        const targetSceneId = args.targetSceneId;
+			        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
+			        pendingRestore = {{ sceneId: targetSceneId, hfov: baseTarget }};
+			        transitioning = true;
+			        viewer.setHfov(zoomTarget, 800);
+			        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
+		        // Start scene switch while zoom animation is still running for a smoother transition.
+		        setTimeout(() => {{
+		            // Important: load the target at its intended HFOV (baseTarget). Otherwise users see a
+		            // "zoom jump" during preview because the kinetic zoom HFOV is much smaller.
+		            loadTargetWithPreview(targetSceneId, args.entryPitch, args.entryYaw, baseTarget);
+		        }}, 260);
+		    }}
+			    const tourConfig = {config_json};
+			    // Build explicit preview scenes (interactive spherical) and remove base-scene `preview`
+			    // to avoid the "previous scene freeze" behavior seen with Pannellum's built-in preview.
+			    try {{
+			        // Pull hires URLs out of config so we can build dedicated hires scenes.
+			        Object.keys(tourConfig.scenes || {{}}).forEach((sid) => {{
+			            const sc = tourConfig.scenes[sid];
+			            if (sc && sc.hires) {{
+			                hiresMap[sid] = sc.hires;
+			                delete sc.hires;
+			            }}
+			        }});
+			        Object.keys(tourConfig.scenes || {{}}).forEach((sid) => {{
+			            const sc = tourConfig.scenes[sid];
+			            if (sc && sc.preview) {{
+			                previewMap[sid] = sc.preview;
+			                delete sc.preview;
+			            }}
+			        }});
+			        Object.keys(previewMap).forEach((sid) => {{
+			            const sc = tourConfig.scenes[sid];
+			            if (!sc) return;
+			            const pid = previewSceneId(sid);
+			            if (tourConfig.scenes[pid]) return;
+			            tourConfig.scenes[pid] = Object.assign({{}}, sc, {{
+			                title: (sc.title || sid) + ' (preview)',
+			                panorama: previewMap[sid],
+			                hotSpots: [],
+			            }});
+			        }});
+			        Object.keys(hiresMap).forEach((sid) => {{
+			            const sc = tourConfig.scenes[sid];
+			            if (!sc) return;
+			            const hid = hiresSceneId(sid);
+			            if (tourConfig.scenes[hid]) return;
+			            tourConfig.scenes[hid] = Object.assign({{}}, sc, {{
+			                title: (sc.title || sid) + ' (ultra)',
+			                panorama: hiresMap[sid],
+			                // keep hotspots in ultra so navigation still works
+			            }});
+			        }});
+			        dbg(`previewMap initialized: ${{Object.keys(previewMap).length}} previews`);
+			    }} catch (_) {{}}
+		    Object.values(tourConfig.scenes).forEach(scene => {{
+		        if (scene.hotSpots) {{
+		            scene.hotSpots.forEach(hs => {{
+		                if (hs.clickHandlerFunc === "smoothSwitch") hs.clickHandlerFunc = smoothSwitch;
+		            }});
+		        }}
+		    }});
+		    window.viewer = pannellum.viewer('panorama', tourConfig);
+		    prefetchLinkedScenes(tourConfig.default.firstScene);
+				    window.viewer.on('scenechange', (sceneId) => {{
+				        prefetchLinkedScenes(sceneId);
+				        dbg(`scenechange -> ${{sceneId}}`);
+				        try {{ updateQualityUI(); }} catch (_) {{}}
+				        // When user opted into ultra, upgrade after arriving and becoming idle.
+				        if (qualityMode === QUALITY_ULTRA) {{
+				            setTimeout(maybeUpgradeToUltra, 50);
+				        }}
+				    }});
+			    window.viewer.on('load', () => {{
+		        const rawSid = (() => {{ try {{ return window.viewer.getScene(); }} catch (_) {{ return null; }} }})();
+		        const baseSid = baseSceneId(rawSid);
+		        const isPreviewLoaded = !!(switchReq && rawSid && rawSid === switchReq.previewId);
+
+		        // If a preview scene loaded, keep the loader timer alive: we still want to show "Loading HD..."
+		        // if full-res takes long. We'll cancel/end only when the base scene finishes loading.
+		        if (loaderShowTimer && !isPreviewLoaded) {{
+		            clearTimeout(loaderShowTimer);
+		            loaderShowTimer = null;
+		            dbg('load: canceled pending loaderShowTimer');
+		        }}
+
+		        if (switchReq && rawSid) {{
+			            if (rawSid === switchReq.previewId) {{
+			                dbg(`load: preview loaded for ${{switchReq.baseId}}`);
+			                try {{ switchReq.previewLoadedAt = Date.now(); }} catch (_) {{}}
+			                switchState = 'preview_ready';
+			                transitioning = false; // allow panning in preview
+			                maybeStartFullAfterPreview();
+			                return;
+			            }}
+		            if (baseSid && baseSid === switchReq.baseId && !isPreviewSceneId(rawSid)) {{
+		                dbg(`load: full loaded for ${{switchReq.baseId}}`);
+		                switchReq = null;
+		                switchState = 'idle';
+		                try {{ activeLoadTarget = null; }} catch (_) {{}}
+		                // fallthrough to common post-load behavior
+		            }}
+		        }}
+		        try {{
+	            const sid = baseSid;
+	            if (sid) {{
+	                let target = defaultHfov();
+	                if (pendingRestore && pendingRestore.sceneId === sid) {{
+	                    target = pendingRestore.hfov;
+	                    pendingRestore = null;
+	                }} else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {{
+	                    target = sceneState[sid].hfov;
+	                }}
+	                sceneState[sid] = {{ hfov: target }};
+	                window.viewer.setHfov(target, 0);
+	            }}
+			        }} catch (_) {{}}
+			        try {{ updateQualityUI(); }} catch (_) {{}}
+				        transitioning = false;
+				        setTimeout(() => endSceneLoading(), 120);
+					    }});
+		    // Kick off initial load after handlers are attached (avoids missing the first 'load' event).
+		    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...', {{ delayMs: 0, allowPreview: false }});
+		    safeLoadScene(tourConfig.default.firstScene);
+
+			    // Track user zoom so we don't "lock" them to one hfov.
+			    const panoEl = document.getElementById('panorama');
+			    if (panoEl) {{
+			        const bump = () => {{ lastUserInputAt = Date.now(); }};
+			        const markDown = () => {{ userInteracting = true; bump(); }};
+			        const markUp = () => {{ userInteracting = false; bump(); }};
+			        panoEl.addEventListener('pointerdown', markDown);
+			        panoEl.addEventListener('pointerup', markUp);
+			        panoEl.addEventListener('pointercancel', markUp);
+			        panoEl.addEventListener('pointermove', bump, {{ passive: true }});
+			        panoEl.addEventListener('touchstart', markDown, {{ passive: true }});
+			        panoEl.addEventListener('touchend', markUp, {{ passive: true }});
+			        panoEl.addEventListener('touchcancel', markUp, {{ passive: true }});
+			        panoEl.addEventListener('mousedown', markDown);
+			        panoEl.addEventListener('mouseup', markUp);
+			        panoEl.addEventListener('mousemove', bump, {{ passive: true }});
+			        panoEl.addEventListener('mouseup', () => setTimeout(storeBaseHfov, 0));
+			        panoEl.addEventListener('touchend', () => setTimeout(storeBaseHfov, 0));
+			        let wheelT = null;
+			        panoEl.addEventListener('wheel', () => {{
+			            bump();
+			            if (wheelT) clearTimeout(wheelT);
+			            wheelT = setTimeout(storeBaseHfov, 120);
+			        }}, {{ passive: true }});
+			    }}
+
+				    // POI dropdown navigation (base scenes only; hide preview/hires variants)
+				    const navBtn = document.getElementById('sceneNavBtn');
+				    const navMenu = document.getElementById('sceneNavMenu');
+				    function baseSceneIds() {{
+				        return Object.keys(tourConfig.scenes || {{}})
+				            .filter((sid) => !isPreviewSceneId(sid) && !isHiresSceneId(sid));
+				    }}
+				    function renderSceneMenu() {{
+				        if (!navMenu) return;
+				        navMenu.innerHTML = '';
+				        const ids = baseSceneIds();
+				        ids.forEach((sid, idx) => {{
+				            const sc = tourConfig.scenes[sid] || {{}};
+				            const item = document.createElement('div');
+				            item.className = 'scene-nav-item';
+				            item.innerHTML = `<span>${{(sc.title || sid)}}</span><span class="pill">#${{idx + 1}}</span>`;
+				            item.addEventListener('click', (ev) => {{
+				                ev.preventDefault();
+				                ev.stopPropagation();
+				                navMenu.style.display = 'none';
+				                if (!window.viewer) return;
+				                const curBase = baseSceneId(window.viewer.getScene && window.viewer.getScene());
+				                if (curBase === sid) return;
+				                transitioning = true;
+				                loadTargetWithPreview(sid, undefined, undefined, undefined);
+				            }});
+				            navMenu.appendChild(item);
+				        }});
+				    }}
+				    function toggleSceneMenu(show) {{
+				        if (!navMenu) return;
+				        const want = (show === undefined) ? (navMenu.style.display !== 'block') : !!show;
+				        if (want) {{
+				            renderSceneMenu();
+				            navMenu.style.display = 'block';
+				        }} else {{
+				            navMenu.style.display = 'none';
+				        }}
+				    }}
+				    if (navBtn && navMenu) {{
+				        navBtn.addEventListener('click', (ev) => {{
+				            ev.preventDefault();
+				            ev.stopPropagation();
+				            toggleSceneMenu();
+				        }});
+				        document.addEventListener('click', () => toggleSceneMenu(false));
+				        document.addEventListener('keydown', (ev) => {{
+				            if (ev.key === 'Escape') toggleSceneMenu(false);
+				        }});
+				    }}
+
+				    // Quality toggle (Web <-> HD), only shown when this scene has a true hi-res variant.
+				    const qNav = document.getElementById('qualityNav');
+				    const qBtn = document.getElementById('qualityBtn');
+				    function updateQualityUI() {{
+				        try {{
+				            if (!qNav || !qBtn || !window.viewer) return;
+				            const cur = window.viewer.getScene ? window.viewer.getScene() : null;
+				            const baseId = baseSceneId(cur);
+				            const has = !!(baseId && hiresMap[baseId]);
+				            if (!has) {{
+				                qNav.style.display = 'none';
+				                qualityMode = QUALITY_STANDARD;
+				                qBtn.textContent = 'Web';
+				                return;
+				            }}
+				            qNav.style.display = 'block';
+				            qBtn.textContent = (qualityMode === QUALITY_ULTRA) ? 'HD' : 'Web';
+				        }} catch (_) {{}}
+				    }}
+				    // Restore saved mode (optional) but only apply when available for the current scene.
+				    try {{
+				        const saved = localStorage.getItem('tourQualityMode');
+				        if (saved === QUALITY_ULTRA) qualityMode = QUALITY_ULTRA;
+				    }} catch (_) {{}}
+				    updateQualityUI();
+				    if (qBtn) {{
+				        qBtn.addEventListener('click', (ev) => {{
+				            ev.preventDefault();
+				            ev.stopPropagation();
+				            const cur = (qualityMode === QUALITY_ULTRA) ? QUALITY_STANDARD : QUALITY_ULTRA;
+				            applyQualityMode(cur);
+				            updateQualityUI();
+				            if (qualityMode === QUALITY_ULTRA) setTimeout(maybeUpgradeToUltra, 50);
+				        }});
+				    }}
     </script>
 </body>
 </html>"""
@@ -2642,6 +3280,8 @@ def serve_gallery_files(project_id, filename):
         try:
             pdir = os.path.join(app.config["PROCESSED_FOLDER"], project_id)
             ipath = os.path.join(pdir, "index.html")
+            # Force regen for debugging sessions so we never fight browser or disk cache while iterating.
+            force_regen = request.args.get("regen") in ("1", "true") or request.args.get("debug") in ("1", "true")
             needs_regen = True
             if os.path.exists(ipath):
                 try:
@@ -2649,15 +3289,27 @@ def serve_gallery_files(project_id, filename):
                         head = f.read(8192)
                     # Regenerate if template marker is missing or outdated.
                     marker = f"lokalny_obiektyw_gallery_template\" content=\"v{GALLERY_TEMPLATE_VERSION}"
-                    if marker in head:
+                    if (not force_regen) and marker in head:
                         needs_regen = False
                 except Exception:
                     needs_regen = True
-            if needs_regen and tour is not None:
+            if needs_regen:
                 scenes = load_tour_scenes_and_hotspots(project_id)
+                if not scenes:
+                    scenes = load_disk_metadata_scenes(project_id)
+                if not scenes:
+                    scenes = load_disk_scenes_from_index_html(project_id)
                 if scenes:
-                    owner_ent = get_user_entitlements(tour["owner_id"])
-                    generate_tour(project_id, scenes, watermark_enabled=owner_ent["watermark_enabled"])
+                    watermark_enabled = False
+                    if tour is not None:
+                        try:
+                            owner_ent = get_user_entitlements(tour["owner_id"])
+                            watermark_enabled = bool(owner_ent.get("watermark_enabled"))
+                        except Exception:
+                            watermark_enabled = False
+                    # Note: some older galleries may exist on disk without a DB row in `tours`.
+                    # We still regenerate `index.html` so players get current UX; access control is enforced above.
+                    generate_tour(project_id, scenes, watermark_enabled=watermark_enabled, force_previews=bool(force_regen))
         except Exception as e:
             app.logger.warning(f"On-demand gallery regen failed: {e}")
     base_dir = os.path.join(app.config['PROCESSED_FOLDER'], project_id)
