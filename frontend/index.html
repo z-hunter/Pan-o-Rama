@@ -31,6 +31,8 @@
         .scene-item { background: #333; padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; cursor: pointer; border: 2px solid transparent; }
         .scene-item.active { border-color: #007bff; background: #3d3d3d; }
         .scene-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
+        .badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.4; vertical-align: middle; border: 1px solid rgba(255,255,255,0.12); }
+        .badge-warn { background: rgba(255,193,7,0.14); color: #ffdb79; border-color: rgba(255,193,7,0.25); }
         .scene-actions { display: flex; gap: 8px; align-items: center; }
         input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; }
         .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
@@ -287,6 +289,7 @@
         let viewer = null;
         let lastClickCoords = null;
         const prefetchCache = new Set();
+        const jobPollers = new Map(); // job_id -> true
         let sceneLoadTimer = null;
         let sceneLoadPct = 0;
 
@@ -359,9 +362,9 @@
             formData.append('is_panorama', isPano ? 'true' : 'false');
             for (let f of files) formData.append('files[]', f);
 
-            setLoading(true, "Stitching Panorama...");
+            setLoading(true, "Uploading...");
             try {
-                const res = await apiFetch(`/tours/${projectId}/scenes`, { method: 'POST', body: formData });
+                const res = await apiFetch(`/tours/${projectId}/scenes?async=1`, { method: 'POST', body: formData });
                 if (!res) return;
                 const text = await res.text();
                 let data = {};
@@ -371,15 +374,94 @@
                     alert("Error processing scene: " + msg);
                     return;
                 }
-                scenes.push(data.scene);
+                if (data.scene) scenes.push(data.scene);
                 updateScenesUI();
                 document.getElementById('gotoStep3').style.display = 'block';
                 document.getElementById('sceneName').value = '';
                 document.getElementById('sceneFiles').value = '';
-                if (!activeSceneId) loadScene(data.scene.id);
+
+                // Async mode: queue job and keep UI responsive while processing.
+                if (data.job_id) {
+                    const s = scenes.find(x => x.id === (data.scene && data.scene.id));
+                    if (s) {
+                        s.job_id = data.job_id;
+                        s.processing_status = s.processing_status || 'queued';
+                        s._job_progress_pct = 0;
+                    }
+                    setLoading(false);
+                    pollJobUntilTerminal(data.job_id, { refreshTourOnDone: true });
+                    return;
+                }
+
+                // Fallback: sync response.
+                if (!activeSceneId && data.scene) loadScene(data.scene.id);
             } catch (e) {
                 alert("Network error or server crash. Check logs.");
-            } finally { setLoading(false); }
+            } finally {
+                // In async mode we already hid the loader after upload.
+                if (document.getElementById('loader').style.display !== 'none') setLoading(false);
+            }
+        }
+
+        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false, showLoader = false } = {}) {
+            if (!jobId || jobPollers.has(jobId)) return;
+            jobPollers.set(jobId, true);
+
+            let done = false;
+            try {
+                while (!done) {
+                    const res = await apiFetch(`/jobs/${jobId}`);
+                    if (!res) return;
+                    const data = await res.json();
+                    const job = data && data.job ? data.job : null;
+                    if (!job) throw new Error('Missing job payload');
+
+                    if (job.scene_id) {
+                        const s = scenes.find(x => x.id === job.scene_id);
+                        if (s) {
+                            s.job_id = job.id;
+                            s.processing_status = job.status;
+                            s._job_progress_pct = Number(job.progress_pct || 0);
+                        }
+                        updateScenesUI();
+                    }
+
+                    if (showLoader) {
+                        setLoading(true, job.message || 'Processing...');
+                        setLoadingProgress(Number(job.progress_pct || 0));
+                    }
+
+                    if (job.status === 'done') {
+                        done = true;
+                        if (refreshTourOnDone) await refreshTour();
+                        break;
+                    }
+                    if (job.status === 'failed') {
+                        done = true;
+                        const err = job.error || job.message || 'Job failed';
+                        alert(err);
+                        break;
+                    }
+
+                    await sleep(900);
+                }
+            } finally {
+                jobPollers.delete(jobId);
+                if (showLoader) setLoading(false);
+            }
+        }
+
+        async function refreshTour() {
+            if (!projectId) return;
+            const res = await apiFetch(`/tours/${projectId}`, { method: 'GET' });
+            if (!res) return;
+            const data = await res.json();
+            if (!res.ok || !data.tour) return;
+            scenes = data.tour.scenes || [];
+            updateScenesUI();
+            document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
         }
 
         function updateScenesUI() {
@@ -387,10 +469,13 @@
             if (!list) return;
             list.innerHTML = '';
             scenes.forEach(s => {
+                const status = (s.processing_status && s.processing_status !== 'ready') ? String(s.processing_status) : '';
+                const pct = (typeof s._job_progress_pct === 'number') ? Math.max(0, Math.min(100, s._job_progress_pct)) : null;
+                const badge = status ? `<span class="badge badge-warn">${status.toUpperCase()}${pct !== null ? (' ' + pct + '%') : ''}</span>` : '';
                 const div = document.createElement('div');
                 div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
                 div.innerHTML = `
-                    <span class="scene-title">🏠 ${s.name}</span>
+                    <span class="scene-title">🏠 ${s.name} ${badge}</span>
                     <span class="scene-actions">
                         <button class="btn btn-danger btn-sm" type="button" data-scene-delete="${s.id}">Delete</button>
                     </span>
@@ -538,6 +623,14 @@
         function loadScene(id, targetPitch = null, targetYaw = null, entryPitch = null, entryYaw = null) {
             const scene = scenes.find(s => s.id === id);
             if (!scene) return;
+            if (scene.processing_status && scene.processing_status !== 'ready') {
+                if (scene.job_id) {
+                    pollJobUntilTerminal(scene.job_id, { refreshTourOnDone: true, showLoader: true });
+                } else {
+                    alert('Scene is still processing.');
+                }
+                return;
+            }
             const imageRef = scene.panorama || (scene.images && scene.images[0]);
             if (!imageRef) return;
             const url = `/galleries/${projectId}/${id}/${imageRef}`;

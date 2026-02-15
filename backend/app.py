@@ -19,6 +19,17 @@ import sqlite3
 import hashlib
 import secrets
 import functools
+import threading
+import traceback
+
+try:
+    import redis  # type: ignore
+except Exception:
+    redis = None
+try:
+    import rq  # type: ignore
+except Exception:
+    rq = None
 try:
     import stripe
 except Exception:
@@ -893,6 +904,244 @@ def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_P
         app.logger.warning(f"Web pano generation failed: {e}")
         return None
 
+
+def process_scene_from_raw_paths(tour_id, scene_id, name, is_pano, raw_paths, order_index, job_id=None):
+    """
+    Pure processing function that can run in HTTP (sync) or in a background worker (async).
+    Expects raw_paths to exist on disk under UPLOAD_FOLDER.
+    Writes outputs under PROCESSED_FOLDER/<tour>/<scene>/.
+    Returns a serialized scene dict (including processing_status fields).
+    """
+    raw_dir = os.path.join(app.config["UPLOAD_FOLDER"], tour_id, scene_id)
+    proc_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour_id, scene_id)
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(proc_dir, exist_ok=True)
+
+    # Process raw -> proc_*.jpg
+    processed = []
+    for rp in raw_paths:
+        fn = os.path.basename(rp)
+        out_fn = f"proc_{fn}"
+        out_path = os.path.join(proc_dir, out_fn)
+        if process_image(rp, out_path):
+            processed.append(out_fn)
+    if not processed:
+        raise RuntimeError("No valid images after processing")
+
+    focal_35 = 26.0
+    try:
+        with Image.open(raw_paths[0]) as img:
+            exif = img.getexif()
+            if exif:
+                f = safe_float(exif.get(41989)) or (safe_float(exif.get(37386)) * 6.0)
+                if f > 0:
+                    focal_35 = f
+    except Exception:
+        pass
+
+    pano_file = None
+    haov, vaov = 100, 60
+    if len(processed) >= 2:
+        ppano = os.path.join(proc_dir, "panorama.jpg")
+        if stitch_panorama([os.path.join(proc_dir, fn) for fn in processed], ppano, is_360=is_pano):
+            pano_file = "panorama.jpg"
+            _pp_w, _pp_h, pp_changed = postprocess_panorama(ppano) if is_pano else (None, None, False)
+            with Image.open(ppano) as img:
+                aspect = img.width / img.height
+                vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
+                if is_pano:
+                    haov = 360 if pp_changed else vaov_c * aspect
+                    vaov = (360 / aspect) if pp_changed else vaov_c
+                else:
+                    haov = vaov_c * aspect
+                    vaov = vaov_c
+        else:
+            haov = 2 * math.degrees(math.atan(18.0 / focal_35))
+            vaov = haov / (16 / 9)
+    else:
+        img_p = os.path.join(proc_dir, processed[0])
+        with Image.open(img_p) as img:
+            aspect = img.width / img.height
+            vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
+            if is_pano:
+                pano_file = processed[0]
+                haov = 360
+                vaov = 360 / aspect
+            else:
+                haov = vaov_c * aspect
+                vaov = vaov_c
+
+    if is_pano:
+        try:
+            ref_path = os.path.join(proc_dir, pano_file) if pano_file else os.path.join(proc_dir, processed[0])
+            with Image.open(ref_path) as img:
+                aspect = img.width / img.height
+            if vaov > 180.0 or haov > 360.0:
+                vaov = 180.0
+                haov = min(360.0, aspect * 180.0)
+            vaov = min(180.0, max(30.0, vaov))
+            haov = min(360.0, max(30.0, haov))
+        except Exception:
+            pass
+
+    # Derivatives
+    src_for_preview = pano_file or (processed[0] if processed else None)
+    preview_path = ensure_scene_preview(tour_id, scene_id, src_for_preview) if src_for_preview else None
+    if src_for_preview:
+        ensure_scene_web_pano(tour_id, scene_id, src_for_preview)
+
+    ts = now_iso()
+    db = get_db()
+    db.execute(
+        """
+        UPDATE scenes
+        SET title = ?, panorama_path = ?, preview_path = ?, images_json = ?, order_index = ?,
+            haov = ?, vaov = ?, scene_type = 'equirectangular',
+            processing_status = 'ready', processing_error = NULL,
+            updated_at = ?
+        WHERE id = ? AND tour_id = ?
+        """,
+        (
+            name,
+            pano_file,
+            preview_path,
+            json.dumps(processed),
+            int(order_index),
+            round(haov, 2),
+            round(vaov, 2),
+            ts,
+            scene_id,
+            tour_id,
+        ),
+    )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour_id))
+    db.commit()
+    row = db.execute("SELECT * FROM scenes WHERE id = ? AND tour_id = ?", (scene_id, tour_id)).fetchone()
+    scene_payload = serialize_scene(row)
+    # If processing succeeded, hotspots are empty for new scenes.
+    scene_payload["hotspots"] = []
+    return scene_payload
+
+
+def job_set_progress(jid, stage=None, progress_pct=None, message=None):
+    fields = {"updated_at": now_iso()}
+    if stage is not None:
+        fields["stage"] = stage
+    if progress_pct is not None:
+        fields["progress_pct"] = int(progress_pct)
+    if message is not None:
+        fields["message"] = message
+    jobs_update(jid, **fields)
+
+
+def run_job_scene_process(jid, payload):
+    """
+    Worker entrypoint for scene processing job.
+    payload keys:
+      - tour_id, scene_id, name, is_pano, raw_paths, order_index
+    """
+    job_set_progress(jid, stage="processing", progress_pct=5, message="Processing images...")
+    tour_id = payload.get("tour_id")
+    scene_id = payload.get("scene_id")
+    name = payload.get("name") or "Unnamed"
+    is_pano = bool(payload.get("is_pano"))
+    raw_paths = payload.get("raw_paths") or []
+    order_index = int(payload.get("order_index") or 0)
+    if not tour_id or not scene_id or not raw_paths:
+        raise RuntimeError("Invalid job payload")
+    job_set_progress(jid, stage="derivatives", progress_pct=55, message="Generating preview/web...")
+    scene_payload = process_scene_from_raw_paths(tour_id, scene_id, name, is_pano, raw_paths, order_index, job_id=jid)
+    job_set_progress(jid, stage="done", progress_pct=100, message="Done")
+    jobs_update(
+        jid,
+        status="done",
+        result_json=json.dumps({"scene": scene_payload}),
+        updated_at=now_iso(),
+    )
+    return True
+
+
+def worker_claim_next_job(db):
+    row = db.execute(
+        "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    ts = now_iso()
+    cur = db.execute(
+        "UPDATE jobs SET status = 'running', stage = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
+        (ts, row["id"]),
+    )
+    if cur.rowcount != 1:
+        db.commit()
+        return None
+    db.commit()
+    return row["id"]
+
+
+def worker_run_once():
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    try:
+        jid = worker_claim_next_job(db)
+        if not jid:
+            return False
+        row = db.execute("SELECT * FROM jobs WHERE id = ?", (jid,)).fetchone()
+        if row is None:
+            return True
+        payload = {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        try:
+            # Use app context so get_db()/config works.
+            with app.app_context():
+                jobs_update(jid, status="running", stage=row["kind"], updated_at=now_iso())
+                if row["kind"] == "scene_process":
+                    run_job_scene_process(jid, payload)
+                else:
+                    raise RuntimeError(f"Unknown job kind: {row['kind']}")
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            tb = traceback.format_exc(limit=20)
+            with app.app_context():
+                jobs_update(
+                    jid,
+                    status="failed",
+                    stage="failed",
+                    progress_pct=100,
+                    message="Failed",
+                    error=err + "\n" + tb,
+                    updated_at=now_iso(),
+                )
+                # Best-effort: mark scene failed if job references a scene.
+                try:
+                    sid = payload.get("scene_id")
+                    tid = payload.get("tour_id")
+                    if sid and tid:
+                        db2 = get_db()
+                        db2.execute(
+                            "UPDATE scenes SET processing_status = 'failed', processing_error = ?, updated_at = ? WHERE id = ? AND tour_id = ?",
+                            (err, now_iso(), sid, tid),
+                        )
+                        db2.commit()
+                except Exception:
+                    pass
+        return True
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def worker_loop(poll_interval_sec=0.75):
+    while True:
+        did = worker_run_once()
+        if not did:
+            time.sleep(float(poll_interval_sec))
+
 def now_iso():
     return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
@@ -1010,17 +1259,36 @@ def init_db():
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
                 -- Small KV cache for billing-related runtime ids (e.g., Stripe price ids created from $ amounts in dev).
-                CREATE TABLE IF NOT EXISTS billing_kv (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
-                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
-                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
-                CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
-                CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
-                CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
+	                CREATE TABLE IF NOT EXISTS billing_kv (
+	                    key TEXT PRIMARY KEY,
+	                    value TEXT NOT NULL,
+	                    updated_at TEXT NOT NULL
+	                );
+	                CREATE TABLE IF NOT EXISTS jobs (
+	                    id TEXT PRIMARY KEY,
+	                    kind TEXT NOT NULL,
+	                    owner_id TEXT NOT NULL,
+	                    tour_id TEXT,
+	                    scene_id TEXT,
+	                    status TEXT NOT NULL,
+	                    stage TEXT,
+	                    progress_pct INTEGER NOT NULL DEFAULT 0,
+	                    message TEXT,
+	                    payload_json TEXT NOT NULL DEFAULT '{}',
+	                    result_json TEXT,
+	                    error TEXT,
+	                    created_at TEXT NOT NULL,
+	                    updated_at TEXT NOT NULL,
+	                    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+	                );
+	                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
+	                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
+	                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
+	                CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
+	                CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
+	                CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
+	                CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_id, created_at);
+	                CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -1031,6 +1299,12 @@ def init_db():
         scene_cols = [r[1] for r in db.execute("PRAGMA table_info(scenes)").fetchall()]
         if "preview_path" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN preview_path TEXT")
+        if "processing_status" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'ready'")
+        if "processing_error" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN processing_error TEXT")
+        if "job_id" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN job_id TEXT")
         ts = now_iso()
         for plan_id, d in DEFAULT_PLAN_DEFS.items():
             db.execute(
@@ -1110,6 +1384,9 @@ def serialize_scene(row):
         "vaov": row["vaov"],
         "type": row["scene_type"],
         "order_index": row["order_index"],
+        "processing_status": row["processing_status"],
+        "processing_error": row["processing_error"],
+        "job_id": row["job_id"],
     }
 
 def get_billing_mode():
@@ -1138,6 +1415,79 @@ def billing_kv_set(key, value):
         (key, value, now_iso()),
     )
     db.commit()
+
+
+def serialize_job(row):
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "owner_id": row["owner_id"],
+        "tour_id": row["tour_id"],
+        "scene_id": row["scene_id"],
+        "status": row["status"],
+        "stage": row["stage"],
+        "progress_pct": int(row["progress_pct"] or 0),
+        "message": row["message"],
+        "result": json.loads(row["result_json"] or "null"),
+        "error": row["error"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def jobs_create(kind, owner_id, payload, tour_id=None, scene_id=None):
+    jid = str(uuid.uuid4())
+    ts = now_iso()
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO jobs (id, kind, owner_id, tour_id, scene_id, status, stage, progress_pct, message, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, '', ?, ?, ?)
+        """,
+        (jid, kind, owner_id, tour_id, scene_id, json.dumps(payload or {}), ts, ts),
+    )
+    db.commit()
+    return jid
+
+
+def jobs_update(jid, **fields):
+    allowed = {
+        "status",
+        "stage",
+        "progress_pct",
+        "message",
+        "result_json",
+        "error",
+        "updated_at",
+    }
+    cols = []
+    vals = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        cols.append(f"{k} = ?")
+        vals.append(v)
+    if not cols:
+        return
+    vals.append(jid)
+    db = get_db()
+    db.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE id = ?", vals)
+    db.commit()
+
+
+def jobs_get_for_owner(jid, owner_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM jobs WHERE id = ? AND owner_id = ?", (jid, owner_id)).fetchone()
+    return row
+
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+@require_auth
+def jobs_get(job_id):
+    row = jobs_get_for_owner(job_id, g.current_user["id"])
+    if row is None:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({"job": serialize_job(row)}), 200
 
 def parse_usd_dollars_to_cents(raw):
     """
@@ -1675,6 +2025,7 @@ def tours_add_scene(tour_id):
         return err
     name = request.form.get("scene_name", "Unnamed")
     is_pano = request.form.get("is_panorama") == "true"
+    want_async = request.args.get("async") in ("1", "true")
     files = request.files.getlist("files[]")
     if not files:
         return jsonify({"error": "No files[] uploaded"}), 400
@@ -1695,6 +2046,37 @@ def tours_add_scene(tour_id):
             rp = os.path.join(raw_dir, fn)
             file.save(rp)
             saved_raw.append(rp)
+    if not saved_raw:
+        return jsonify({"error": "No valid images"}), 400
+
+    if want_async:
+        # Insert placeholder scene row; worker will fill panorama/preview/images later.
+        ts = now_iso()
+        db.execute(
+            """
+            INSERT INTO scenes (id, tour_id, title, panorama_path, preview_path, images_json, order_index, haov, vaov, scene_type, processing_status, processing_error, job_id, created_at, updated_at)
+            VALUES (?, ?, ?, NULL, NULL, '[]', ?, 360, 180, 'equirectangular', 'queued', NULL, NULL, ?, ?)
+            """,
+            (sid, tour["id"], name, order_index, ts, ts),
+        )
+        db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
+        db.commit()
+
+        payload = {
+            "tour_id": tour["id"],
+            "scene_id": sid,
+            "name": name,
+            "is_pano": bool(is_pano),
+            "raw_paths": saved_raw,
+            "order_index": order_index,
+        }
+        jid = jobs_create("scene_process", g.current_user["id"], payload, tour_id=tour["id"], scene_id=sid)
+        db.execute("UPDATE scenes SET job_id = ?, updated_at = ? WHERE id = ? AND tour_id = ?", (jid, now_iso(), sid, tour["id"]))
+        db.commit()
+        row = db.execute("SELECT * FROM scenes WHERE id = ? AND tour_id = ?", (sid, tour["id"])).fetchone()
+        return jsonify({"job_id": jid, "scene": serialize_scene(row)}), 202
+
+    # Sync path (existing behavior)
     for rp in saved_raw:
         fn = f"proc_{os.path.basename(rp)}"
         pp = os.path.join(proc_dir, fn)
@@ -1768,8 +2150,8 @@ def tours_add_scene(tour_id):
     preview_path = ensure_scene_preview(tour["id"], sid, src_for_preview) if src_for_preview else None
     db.execute(
         """
-        INSERT INTO scenes (id, tour_id, title, panorama_path, preview_path, images_json, order_index, haov, vaov, scene_type, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'equirectangular', ?, ?)
+        INSERT INTO scenes (id, tour_id, title, panorama_path, preview_path, images_json, order_index, haov, vaov, scene_type, processing_status, processing_error, job_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'equirectangular', 'ready', NULL, NULL, ?, ?)
         """,
         (sid, tour["id"], name, pano_file, preview_path, json.dumps(processed), order_index, round(haov, 2), round(vaov, 2), ts, ts),
     )

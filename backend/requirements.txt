@@ -5,3 +5,5 @@ opencv-python
 flask-cors
 numpy
 stripe
+rq
+redis
