@@ -50,7 +50,7 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
-GALLERY_TEMPLATE_VERSION = 32
+GALLERY_TEMPLATE_VERSION = 33
 
 @app.route("/__debug/version")
 def debug_version():
@@ -828,21 +828,17 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
             im = ImageOps.exif_transpose(im)
             if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
-            # Create a stable 2:1 preview for equirectangular panos WITHOUT cropping (cropping feels like "zoom").
+            # Preview must preserve proportions. Do NOT crop or force a 2:1 canvas here; some tours use
+            # non-2:1 sources and forcing 2:1 can look like distortion/zoom.
             try:
                 resample = Image.Resampling.LANCZOS
             except Exception:
                 resample = Image.LANCZOS
             try:
-                im.thumbnail(max_size, resample)  # preserves full frame
-                canvas = Image.new("RGB", max_size, (0, 0, 0))
-                ox = (max_size[0] - im.width) // 2
-                oy = (max_size[1] - im.height) // 2
-                canvas.paste(im, (ox, oy))
-                im = canvas
+                im.thumbnail(max_size, resample)  # preserves aspect ratio
             except Exception:
-                # Worst-case fallback: resize (still no crop)
-                im = im.resize(max_size, resample=resample)
+                # If thumbnail fails, keep original image (better than distorting).
+                pass
             im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
         try:
             Image.MAX_IMAGE_PIXELS = old_max
