@@ -50,7 +50,7 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
-GALLERY_TEMPLATE_VERSION = 33
+GALLERY_TEMPLATE_VERSION = 34
 
 @app.route("/__debug/version")
 def debug_version():
@@ -2685,18 +2685,34 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 		        return prefetchPromises.get(baseId) || Promise.resolve(false);
 		    }}
 
-			    function requestSwitch(targetSceneId, entryPitch, entryYaw, hfov) {{
-			        const baseId = baseSceneId(targetSceneId);
-			        if (!baseId || !window.viewer) return;
-		        if (switchState !== 'idle') {{
-		            dbg(`switch ignored (busy): ${{switchState}} -> ${{baseId}}`);
-		            return;
-		        }}
-			        const previewId = previewSceneId(baseId);
-			        const havePreview = !!(tourConfig && tourConfig.scenes && tourConfig.scenes[previewId]);
-			        const myTok = (activeSceneLoadToken + 1); // optimistic token before beginSceneLoadingSmart bumps it
-			        const hfovForPreview = (havePreview && typeof hfov === 'number') ? previewCompensatedHfov(baseId, hfov) : hfov;
-			        switchReq = {{ baseId: baseId, previewId: previewId, pitch: entryPitch, yaw: entryYaw, hfov: hfovForPreview, prefetchP: null, token: myTok, previewLoadedAt: 0 }};
+				    function requestSwitch(targetSceneId, entryPitch, entryYaw, hfov) {{
+				        const baseId = baseSceneId(targetSceneId);
+				        if (!baseId || !window.viewer) return;
+			        if (switchState !== 'idle') {{
+			            // Allow users to keep navigating while we're showing a preview by canceling the
+			            // in-flight full-res switch and starting a new one.
+			            try {{
+			                const cur = window.viewer.getScene ? window.viewer.getScene() : null;
+			                if (cur && isPreviewSceneId(cur)) {{
+			                    dbg(`switch cancel (busy=${{switchState}}) -> ${{baseId}}`);
+			                    switchReq = null;
+			                    switchState = 'idle';
+			                    activeLoadTarget = null;
+			                    endSceneLoading();
+			                }} else {{
+			                    dbg(`switch ignored (busy): ${{switchState}} -> ${{baseId}}`);
+			                    return;
+			                }}
+			            }} catch (_) {{
+			                dbg(`switch ignored (busy): ${{switchState}} -> ${{baseId}}`);
+			                return;
+			            }}
+			        }}
+				        const previewId = previewSceneId(baseId);
+				        const havePreview = !!(tourConfig && tourConfig.scenes && tourConfig.scenes[previewId]);
+				        const myTok = (activeSceneLoadToken + 1); // optimistic token before beginSceneLoadingSmart bumps it
+				        const hfovForPreview = (havePreview && typeof hfov === 'number') ? previewCompensatedHfov(baseId, hfov) : hfov;
+				        switchReq = {{ baseId: baseId, previewId: previewId, pitch: entryPitch, yaw: entryYaw, hfov: hfovForPreview, prefetchP: null, token: myTok, previewLoadedAt: 0 }};
 			        activeLoadTarget = baseId;
 			        switchState = havePreview ? 'loading_preview' : 'loading_full';
 		        dbg(`switch target=${{baseId}} havePreview=${{havePreview}} state=${{prefetchState.get(baseId) || '(none)'}}`);
@@ -3026,17 +3042,18 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 			                delete sc.preview;
 			            }}
 			        }});
-			        Object.keys(previewMap).forEach((sid) => {{
-			            const sc = tourConfig.scenes[sid];
-			            if (!sc) return;
-			            const pid = previewSceneId(sid);
-			            if (tourConfig.scenes[pid]) return;
-			            tourConfig.scenes[pid] = Object.assign({{}}, sc, {{
-			                title: (sc.title || sid) + ' (preview)',
-			                panorama: previewMap[sid],
-			                hotSpots: [],
-			            }});
-			        }});
+				        Object.keys(previewMap).forEach((sid) => {{
+				            const sc = tourConfig.scenes[sid];
+				            if (!sc) return;
+				            const pid = previewSceneId(sid);
+				            if (tourConfig.scenes[pid]) return;
+				            const hs = Array.isArray(sc.hotSpots) ? sc.hotSpots.map(h => Object.assign({{}}, h)) : [];
+				            tourConfig.scenes[pid] = Object.assign({{}}, sc, {{
+				                title: (sc.title || sid) + ' (preview)',
+				                panorama: previewMap[sid],
+				                hotSpots: hs,
+				            }});
+				        }});
 			        Object.keys(hiresMap).forEach((sid) => {{
 			            const sc = tourConfig.scenes[sid];
 			            if (!sc) return;
@@ -3068,10 +3085,11 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 				            setTimeout(maybeUpgradeToUltra, 50);
 				        }}
 				    }});
-			    window.viewer.on('load', () => {{
-		        const rawSid = (() => {{ try {{ return window.viewer.getScene(); }} catch (_) {{ return null; }} }})();
-		        const baseSid = baseSceneId(rawSid);
-		        const isPreviewLoaded = !!(switchReq && rawSid && rawSid === switchReq.previewId);
+				    window.viewer.on('load', () => {{
+				        const rawSid = (() => {{ try {{ return window.viewer.getScene(); }} catch (_) {{ return null; }} }})();
+				        const baseSid = baseSceneId(rawSid);
+				        const isPreviewLoaded = !!(switchReq && rawSid && rawSid === switchReq.previewId);
+				        let preserveView = null;
 
 		        // If a preview scene loaded, keep the loader timer alive: we still want to show "Loading HD..."
 		        // if full-res takes long. We'll cancel/end only when the base scene finishes loading.
@@ -3081,41 +3099,58 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 		            dbg('load: canceled pending loaderShowTimer');
 		        }}
 
-		        if (switchReq && rawSid) {{
-			            if (rawSid === switchReq.previewId) {{
-			                dbg(`load: preview loaded for ${{switchReq.baseId}}`);
-			                try {{ switchReq.previewLoadedAt = Date.now(); }} catch (_) {{}}
-			                switchState = 'preview_ready';
-			                transitioning = false; // allow panning in preview
-			                maybeStartFullAfterPreview();
-			                return;
+				        if (switchReq && rawSid) {{
+					            if (rawSid === switchReq.previewId) {{
+					                dbg(`load: preview loaded for ${{switchReq.baseId}}`);
+					                try {{ switchReq.previewLoadedAt = Date.now(); }} catch (_) {{}}
+					                switchState = 'preview_ready';
+					                transitioning = false; // allow panning in preview
+					                maybeStartFullAfterPreview();
+					                return;
+					            }}
+					            if (baseSid && baseSid === switchReq.baseId && !isPreviewSceneId(rawSid)) {{
+					                dbg(`load: full loaded for ${{switchReq.baseId}}`);
+					                preserveView = {{
+					                    pitch: switchReq.pitch,
+					                    yaw: switchReq.yaw,
+					                    hfov: switchReq.hfov,
+					                }};
+					                switchReq = null;
+					                switchState = 'idle';
+					                try {{ activeLoadTarget = null; }} catch (_) {{}}
+					                // fallthrough to common post-load behavior
+					            }}
+				        }}
+				        try {{
+			            const sid = baseSid;
+			            if (sid) {{
+			                let target = defaultHfov();
+			                if (preserveView && typeof preserveView.hfov === 'number') {{
+			                    // Keep the user's view from preview so the switch is seamless.
+			                    target = preserveView.hfov;
+			                    if (pendingRestore && pendingRestore.sceneId === sid) pendingRestore = null;
+			                }} else if (pendingRestore && pendingRestore.sceneId === sid) {{
+			                    target = pendingRestore.hfov;
+			                    pendingRestore = null;
+			                }} else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {{
+			                    target = sceneState[sid].hfov;
+			                }}
+			                sceneState[sid] = {{ hfov: target }};
+			                window.viewer.setHfov(target, 0);
+			                if (
+			                    preserveView &&
+			                    typeof preserveView.pitch === 'number' &&
+			                    typeof preserveView.yaw === 'number' &&
+			                    typeof window.viewer.lookAt === 'function'
+			                ) {{
+			                    window.viewer.lookAt(preserveView.pitch, preserveView.yaw, target, 0);
+			                }}
 			            }}
-		            if (baseSid && baseSid === switchReq.baseId && !isPreviewSceneId(rawSid)) {{
-		                dbg(`load: full loaded for ${{switchReq.baseId}}`);
-		                switchReq = null;
-		                switchState = 'idle';
-		                try {{ activeLoadTarget = null; }} catch (_) {{}}
-		                // fallthrough to common post-load behavior
-		            }}
-		        }}
-		        try {{
-	            const sid = baseSid;
-	            if (sid) {{
-	                let target = defaultHfov();
-	                if (pendingRestore && pendingRestore.sceneId === sid) {{
-	                    target = pendingRestore.hfov;
-	                    pendingRestore = null;
-	                }} else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {{
-	                    target = sceneState[sid].hfov;
-	                }}
-	                sceneState[sid] = {{ hfov: target }};
-	                window.viewer.setHfov(target, 0);
-	            }}
-			        }} catch (_) {{}}
-			        try {{ updateQualityUI(); }} catch (_) {{}}
-				        transitioning = false;
-				        setTimeout(() => endSceneLoading(), 120);
-					    }});
+				        }} catch (_) {{}}
+				        try {{ updateQualityUI(); }} catch (_) {{}}
+					        transitioning = false;
+					        setTimeout(() => endSceneLoading(), 120);
+						    }});
 		    // Kick off initial load after handlers are attached (avoids missing the first 'load' event).
 		    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...', {{ delayMs: 0, allowPreview: false }});
 		    safeLoadScene(tourConfig.default.firstScene);
