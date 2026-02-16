@@ -159,7 +159,7 @@ function fmtDuration(totalSec) {
 
 async function loadStats() {
   const period = (document.getElementById('statsPeriod') || {}).value || 'week';
-  const out = await api(`/analytics/summary?period=${encodeURIComponent(period)}`);
+  const out = await api(`/api/analytics/summary?period=${encodeURIComponent(period)}`);
   if (!out || !out.res.ok) {
     statsAmount.textContent = out && out.data && out.data.error ? out.data.error : 'Failed to load analytics';
     return;

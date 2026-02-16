@@ -2093,6 +2093,7 @@ def analytics_period_start(period):
 
 
 @app.route("/analytics/summary", methods=["GET"])
+@app.route("/api/analytics/summary", methods=["GET"])
 @require_auth
 def analytics_summary():
     period, since_iso = analytics_period_start(request.args.get("period"))
@@ -2937,6 +2938,7 @@ def public_gallery():
 
 
 @app.route("/analytics/tour/start", methods=["POST"])
+@app.route("/api/analytics/tour/start", methods=["POST"])
 def analytics_tour_start():
     data = request.get_json(silent=True) or {}
     tour_id = (data.get("tour_id") or "").strip() or None
@@ -2952,6 +2954,7 @@ def analytics_tour_start():
 
 
 @app.route("/analytics/tour/end", methods=["POST"])
+@app.route("/api/analytics/tour/end", methods=["POST"])
 def analytics_tour_end():
     data = request.get_json(silent=True) or {}
     tour_id = (data.get("tour_id") or "").strip() or None
@@ -3321,9 +3324,9 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 		        if (TOUR_END_SENT) return;
 		        TOUR_END_SENT = true;
 		        const sec = Math.max(0, Math.round((Date.now() - TOUR_ENTERED_AT_MS) / 1000));
-		        sendTourAnalytics('/analytics/tour/end', {{ tour_id: TOUR_ID, duration_sec: sec }});
+		        sendTourAnalytics('/api/analytics/tour/end', {{ tour_id: TOUR_ID, duration_sec: sec }});
 		    }}
-		    sendTourAnalytics('/analytics/tour/start', {{ tour_id: TOUR_ID }});
+		    sendTourAnalytics('/api/analytics/tour/start', {{ tour_id: TOUR_ID }});
 		    window.addEventListener('pagehide', sendTourEndOnce, {{ once: true }});
 		    window.addEventListener('beforeunload', sendTourEndOnce, {{ once: true }});
 
