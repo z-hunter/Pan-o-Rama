@@ -63,7 +63,8 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
-GALLERY_TEMPLATE_VERSION = 34
+GALLERY_TEMPLATE_VERSION = 35
+VISITOR_COOKIE_NAME = "lo_vid"
 
 @app.route("/__debug/version")
 def debug_version():
@@ -1354,6 +1355,20 @@ def init_db():
 	                    updated_at TEXT NOT NULL,
 	                    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 	                );
+	                CREATE TABLE IF NOT EXISTS analytics_events (
+	                    id TEXT PRIMARY KEY,
+	                    event_type TEXT NOT NULL,
+	                    visitor_id TEXT NOT NULL,
+	                    user_id TEXT,
+	                    tour_id TEXT,
+	                    path TEXT,
+	                    duration_sec INTEGER,
+	                    amount_cents INTEGER,
+	                    currency TEXT,
+	                    dedupe_key TEXT,
+	                    meta_json TEXT NOT NULL DEFAULT '{}',
+	                    created_at TEXT NOT NULL
+	                );
 	                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
 	                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
 	                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
@@ -1362,6 +1377,9 @@ def init_db():
 	                CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
 	                CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_id, created_at);
 	                CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+	                CREATE INDEX IF NOT EXISTS idx_analytics_type_time ON analytics_events(event_type, created_at);
+	                CREATE INDEX IF NOT EXISTS idx_analytics_visitor_time ON analytics_events(visitor_id, created_at);
+	                CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_dedupe ON analytics_events(dedupe_key);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -1414,6 +1432,25 @@ def get_current_user():
 @app.before_request
 def attach_current_user():
     g.current_user = get_current_user()
+    g.visitor_id = request.cookies.get(VISITOR_COOKIE_NAME) or str(uuid.uuid4())
+    g.set_visitor_cookie = (request.cookies.get(VISITOR_COOKIE_NAME) is None)
+
+
+@app.after_request
+def persist_visitor_cookie(resp):
+    try:
+        if getattr(g, "set_visitor_cookie", False):
+            # 2 years is enough for coarse unique-visitor analytics.
+            resp.set_cookie(
+                VISITOR_COOKIE_NAME,
+                g.visitor_id,
+                max_age=60 * 60 * 24 * 730,
+                httponly=True,
+                samesite="Lax",
+            )
+    except Exception:
+        pass
+    return resp
 
 def require_auth(view_fn):
     @functools.wraps(view_fn)
@@ -1422,6 +1459,35 @@ def require_auth(view_fn):
             return jsonify({"error": "Unauthorized"}), 401
         return view_fn(*args, **kwargs)
     return wrapper
+
+
+def analytics_track(event_type, *, visitor_id=None, user_id=None, tour_id=None, path=None, duration_sec=None, amount_cents=None, currency=None, dedupe_key=None, meta=None):
+    try:
+        db = get_db()
+        db.execute(
+            """
+            INSERT OR IGNORE INTO analytics_events
+            (id, event_type, visitor_id, user_id, tour_id, path, duration_sec, amount_cents, currency, dedupe_key, meta_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                event_type,
+                visitor_id or getattr(g, "visitor_id", None) or "anon",
+                user_id,
+                tour_id,
+                path,
+                int(duration_sec) if duration_sec is not None else None,
+                int(amount_cents) if amount_cents is not None else None,
+                (currency or "").upper() if currency else None,
+                dedupe_key,
+                json.dumps(meta or {}, ensure_ascii=False),
+                now_iso(),
+            ),
+        )
+        db.commit()
+    except Exception as e:
+        app.logger.warning("analytics_track failed: %s", e)
 
 def normalize_visibility(val):
     return "public" if val == "public" else "private"
@@ -2012,6 +2078,82 @@ def me_password():
     db.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (generate_password_hash(new_password), now_iso(), user["id"]))
     db.commit()
     return jsonify({"message": "Password updated"}), 200
+
+
+def analytics_period_start(period):
+    p = (period or "week").strip().lower()
+    now = datetime.datetime.utcnow().replace(microsecond=0)
+    if p == "all":
+        return "all", None
+    if p == "month":
+        start = now - datetime.timedelta(days=30)
+        return "month", start.isoformat() + "Z"
+    start = now - datetime.timedelta(days=7)
+    return "week", start.isoformat() + "Z"
+
+
+@app.route("/analytics/summary", methods=["GET"])
+@require_auth
+def analytics_summary():
+    period, since_iso = analytics_period_start(request.args.get("period"))
+    db = get_db()
+    params = [since_iso] if since_iso else []
+
+    tour_unique = db.execute(
+        f"SELECT COUNT(DISTINCT visitor_id) AS n FROM analytics_events WHERE event_type = 'tour_visit_start'"
+        + (" AND created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()["n"] or 0
+    tour_dur = db.execute(
+        f"SELECT COALESCE(SUM(duration_sec), 0) AS s FROM analytics_events WHERE event_type = 'tour_visit_end'"
+        + (" AND created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()["s"] or 0
+    home_unique = db.execute(
+        f"SELECT COUNT(DISTINCT visitor_id) AS n FROM analytics_events WHERE event_type = 'home_view'"
+        + (" AND created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()["n"] or 0
+
+    users_registered = db.execute(
+        "SELECT COUNT(*) AS n FROM users" + (" WHERE created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()["n"] or 0
+    tours_created = db.execute(
+        "SELECT COUNT(*) AS n FROM tours" + (" WHERE created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()["n"] or 0
+
+    checkout_row = db.execute(
+        f"SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS s FROM analytics_events WHERE event_type = 'checkout_completed'"
+        + (" AND created_at >= ?" if since_iso else ""),
+        params,
+    ).fetchone()
+    by_currency_rows = db.execute(
+        f"SELECT COALESCE(currency, 'UNK') AS c, COALESCE(SUM(amount_cents), 0) AS s "
+        f"FROM analytics_events WHERE event_type = 'checkout_completed'"
+        + (" AND created_at >= ?" if since_iso else "")
+        + " GROUP BY COALESCE(currency, 'UNK')",
+        params,
+    ).fetchall()
+    by_currency = {r["c"]: int(r["s"] or 0) for r in by_currency_rows}
+    avg_dur = int(round(float(tour_dur) / float(tour_unique))) if tour_unique else 0
+
+    return jsonify(
+        {
+            "period": period,
+            "since": since_iso,
+            "tour_visitors_unique": int(tour_unique),
+            "tour_time_total_sec": int(tour_dur),
+            "tour_time_avg_per_unique_sec": int(avg_dur),
+            "home_visitors_unique": int(home_unique),
+            "tours_created": int(tours_created),
+            "users_registered": int(users_registered),
+            "checkouts_count": int(checkout_row["n"] or 0),
+            "checkouts_amount_total_cents": int(checkout_row["s"] or 0),
+            "checkouts_amount_by_currency_cents": by_currency,
+        }
+    ), 200
 
 @app.route("/tours", methods=["POST"])
 @require_auth
@@ -2637,6 +2779,16 @@ def billing_mock_subscribe():
     if plan_id is None:
         return jsonify({"error": "Invalid plan_id"}), 400
     set_user_plan(g.current_user["id"], plan_id, provider="mock")
+    if plan_id in {PLAN_PRO, PLAN_BUSINESS}:
+        plan_row = get_plan_row(plan_id)
+        analytics_track(
+            "checkout_completed",
+            visitor_id=getattr(g, "visitor_id", None),
+            user_id=g.current_user["id"],
+            amount_cents=(int(plan_row["price_monthly_cents"]) if plan_row is not None else 0),
+            currency="USD",
+            meta={"provider": "mock", "plan_id": plan_id},
+        )
     ent = get_user_entitlements(g.current_user["id"])
     return jsonify({"message": "Plan updated", "plan_id": ent["plan_id"], "entitlements": ent}), 200
 
@@ -2695,6 +2847,7 @@ def billing_webhook_stripe():
         return jsonify({"error": "Invalid webhook payload"}), 400
 
     event_type = event.get("type")
+    event_id = (event.get("id") or "").strip() or None
     obj = (event.get("data") or {}).get("object") or {}
     db = get_db()
 
@@ -2704,6 +2857,21 @@ def billing_webhook_stripe():
         target_plan_id = parse_plan_id(md.get("target_plan_id"))
         customer_id = obj.get("customer")
         sub_id = obj.get("subscription")
+        amount_total = obj.get("amount_total")
+        currency = obj.get("currency") or "USD"
+        if amount_total is None and target_plan_id in {PLAN_PRO, PLAN_BUSINESS}:
+            plan_row = get_plan_row(target_plan_id)
+            if plan_row is not None:
+                amount_total = int(plan_row["price_monthly_cents"] or 0)
+        analytics_track(
+            "checkout_completed",
+            visitor_id=getattr(g, "visitor_id", None),
+            user_id=user_id,
+            amount_cents=amount_total if amount_total is not None else 0,
+            currency=currency,
+            dedupe_key=(f"stripe_evt:{event_id}" if event_id else None),
+            meta={"provider": "stripe", "plan_id": target_plan_id, "subscription_id": sub_id},
+        )
         if target_plan_id is None:
             target_plan_id = infer_plan_from_subscription(sub_id)
         if user_id and target_plan_id in {PLAN_PRO, PLAN_BUSINESS}:
@@ -2767,6 +2935,43 @@ def public_gallery():
     ).fetchall()
     return jsonify({"items": [dict(r) for r in rows]}), 200
 
+
+@app.route("/analytics/tour/start", methods=["POST"])
+def analytics_tour_start():
+    data = request.get_json(silent=True) or {}
+    tour_id = (data.get("tour_id") or "").strip() or None
+    analytics_track(
+        "tour_visit_start",
+        visitor_id=getattr(g, "visitor_id", None),
+        user_id=(g.current_user["id"] if g.current_user is not None else None),
+        tour_id=tour_id,
+        path=request.path,
+        meta={"referrer": request.headers.get("Referer"), "ua": request.headers.get("User-Agent", "")[:180]},
+    )
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/analytics/tour/end", methods=["POST"])
+def analytics_tour_end():
+    data = request.get_json(silent=True) or {}
+    tour_id = (data.get("tour_id") or "").strip() or None
+    duration = data.get("duration_sec")
+    try:
+        duration = int(duration)
+    except Exception:
+        duration = None
+    if duration is not None:
+        duration = max(0, min(duration, 24 * 60 * 60))
+    analytics_track(
+        "tour_visit_end",
+        visitor_id=getattr(g, "visitor_id", None),
+        user_id=(g.current_user["id"] if g.current_user is not None else None),
+        tour_id=tour_id,
+        path=request.path,
+        duration_sec=duration,
+    )
+    return jsonify({"ok": True}), 200
+
 @app.route("/t/<slug>", methods=["GET"])
 def open_share_link(slug):
     db = get_db()
@@ -2782,7 +2987,14 @@ def open_share_link(slug):
     return redirect(f"/galleries/{tour['id']}/index.html", code=302)
 
 @app.route('/')
-def index(): return send_from_directory(FRONTEND_FOLDER, 'index.html')
+def index():
+    analytics_track(
+        "home_view",
+        visitor_id=getattr(g, "visitor_id", None),
+        user_id=(g.current_user["id"] if g.current_user is not None else None),
+        path=request.path,
+    )
+    return send_from_directory(FRONTEND_FOLDER, 'index.html')
 
 @app.route('/login')
 def login_page():
@@ -3086,6 +3298,34 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 		            console.log('[tour]', `[${{new Date().toISOString().slice(11, 19)}}]`, msg);
 		        }} catch (_) {{}}
 		    }}
+		    const TOUR_ID = "{project_id}";
+		    const TOUR_ENTERED_AT_MS = Date.now();
+		    let TOUR_END_SENT = false;
+		    function sendTourAnalytics(path, payload) {{
+		        try {{
+		            const body = JSON.stringify(payload || {{}});
+		            if (navigator.sendBeacon) {{
+		                const blob = new Blob([body], {{ type: 'application/json' }});
+		                navigator.sendBeacon(path, blob);
+		                return;
+		            }}
+		            fetch(path, {{
+		                method: 'POST',
+		                headers: {{ 'Content-Type': 'application/json' }},
+		                body: body,
+		                keepalive: true
+		            }}).catch(() => {{}});
+		        }} catch (_) {{}}
+		    }}
+		    function sendTourEndOnce() {{
+		        if (TOUR_END_SENT) return;
+		        TOUR_END_SENT = true;
+		        const sec = Math.max(0, Math.round((Date.now() - TOUR_ENTERED_AT_MS) / 1000));
+		        sendTourAnalytics('/analytics/tour/end', {{ tour_id: TOUR_ID, duration_sec: sec }});
+		    }}
+		    sendTourAnalytics('/analytics/tour/start', {{ tour_id: TOUR_ID }});
+		    window.addEventListener('pagehide', sendTourEndOnce, {{ once: true }});
+		    window.addEventListener('beforeunload', sendTourEndOnce, {{ once: true }});
 
 			    const prefetchCache = new Set();
 			    const prefetchPromises = new Map(); // sceneId -> Promise
