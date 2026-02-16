@@ -65,6 +65,7 @@ PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
 GALLERY_TEMPLATE_VERSION = 35
 VISITOR_COOKIE_NAME = "lo_vid"
+ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
 
 @app.route("/__debug/version")
 def debug_version():
@@ -1461,6 +1462,36 @@ def require_auth(view_fn):
     return wrapper
 
 
+def get_admin_analytics_password():
+    return (os.getenv("ADMIN_ANALYTICS_PASSWORD") or "").strip()
+
+
+def admin_analytics_cookie_token():
+    pwd = get_admin_analytics_password()
+    if not pwd:
+        return None
+    return hashlib.sha256(f"lo_admin:{pwd}".encode("utf-8")).hexdigest()
+
+
+def has_admin_analytics_access():
+    expected = admin_analytics_cookie_token()
+    if not expected:
+        return False
+    provided = request.cookies.get(ADMIN_ANALYTICS_COOKIE_NAME) or ""
+    return secrets.compare_digest(provided, expected)
+
+
+def require_admin_analytics(view_fn):
+    @functools.wraps(view_fn)
+    def wrapper(*args, **kwargs):
+        if not get_admin_analytics_password():
+            return jsonify({"error": "Admin analytics password is not configured"}), 503
+        if not has_admin_analytics_access():
+            return jsonify({"error": "Unauthorized"}), 401
+        return view_fn(*args, **kwargs)
+    return wrapper
+
+
 def analytics_track(event_type, *, visitor_id=None, user_id=None, tour_id=None, path=None, duration_sec=None, amount_cents=None, currency=None, dedupe_key=None, meta=None):
     try:
         db = get_db()
@@ -2092,11 +2123,8 @@ def analytics_period_start(period):
     return "week", start.isoformat() + "Z"
 
 
-@app.route("/analytics/summary", methods=["GET"])
-@app.route("/api/analytics/summary", methods=["GET"])
-@require_auth
-def analytics_summary():
-    period, since_iso = analytics_period_start(request.args.get("period"))
+def build_analytics_summary_payload(period_raw):
+    period, since_iso = analytics_period_start(period_raw)
     db = get_db()
     params = [since_iso] if since_iso else []
 
@@ -2140,21 +2168,26 @@ def analytics_summary():
     by_currency = {r["c"]: int(r["s"] or 0) for r in by_currency_rows}
     avg_dur = int(round(float(tour_dur) / float(tour_unique))) if tour_unique else 0
 
-    return jsonify(
-        {
-            "period": period,
-            "since": since_iso,
-            "tour_visitors_unique": int(tour_unique),
-            "tour_time_total_sec": int(tour_dur),
-            "tour_time_avg_per_unique_sec": int(avg_dur),
-            "home_visitors_unique": int(home_unique),
-            "tours_created": int(tours_created),
-            "users_registered": int(users_registered),
-            "checkouts_count": int(checkout_row["n"] or 0),
-            "checkouts_amount_total_cents": int(checkout_row["s"] or 0),
-            "checkouts_amount_by_currency_cents": by_currency,
-        }
-    ), 200
+    return {
+        "period": period,
+        "since": since_iso,
+        "tour_visitors_unique": int(tour_unique),
+        "tour_time_total_sec": int(tour_dur),
+        "tour_time_avg_per_unique_sec": int(avg_dur),
+        "home_visitors_unique": int(home_unique),
+        "tours_created": int(tours_created),
+        "users_registered": int(users_registered),
+        "checkouts_count": int(checkout_row["n"] or 0),
+        "checkouts_amount_total_cents": int(checkout_row["s"] or 0),
+        "checkouts_amount_by_currency_cents": by_currency,
+    }
+
+
+@app.route("/analytics/summary", methods=["GET"])
+@app.route("/api/analytics/summary", methods=["GET"])
+@require_admin_analytics
+def analytics_summary():
+    return jsonify(build_analytics_summary_payload(request.args.get("period"))), 200
 
 @app.route("/tours", methods=["POST"])
 @require_auth
@@ -2953,6 +2986,39 @@ def analytics_tour_start():
     return jsonify({"ok": True}), 200
 
 
+@app.route("/api/admin/analytics/login", methods=["POST"])
+def admin_analytics_login():
+    expected = get_admin_analytics_password()
+    if not expected:
+        return jsonify({"error": "Admin analytics password is not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    password = (data.get("password") or "").strip()
+    if not password or not secrets.compare_digest(password, expected):
+        return jsonify({"error": "Invalid password"}), 401
+    resp = jsonify({"ok": True})
+    resp.set_cookie(
+        ADMIN_ANALYTICS_COOKIE_NAME,
+        admin_analytics_cookie_token(),
+        max_age=60 * 60 * 12,
+        httponly=True,
+        samesite="Lax",
+    )
+    return resp, 200
+
+
+@app.route("/api/admin/analytics/logout", methods=["POST"])
+def admin_analytics_logout():
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(ADMIN_ANALYTICS_COOKIE_NAME)
+    return resp, 200
+
+
+@app.route("/api/admin/analytics/summary", methods=["GET"])
+@require_admin_analytics
+def admin_analytics_summary():
+    return jsonify(build_analytics_summary_payload(request.args.get("period"))), 200
+
+
 @app.route("/api/analytics/home", methods=["POST"])
 def analytics_home_view():
     analytics_track(
@@ -3022,6 +3088,10 @@ def dashboard_page():
 @app.route('/account')
 def account_page():
     return send_from_directory(FRONTEND_FOLDER, 'account.html')
+
+@app.route('/admin/analytics')
+def admin_analytics_page():
+    return send_from_directory(FRONTEND_FOLDER, 'admin_analytics.html')
 
 @app.route('/img/<path:filename>')
 def static_img(filename):

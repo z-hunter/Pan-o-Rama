@@ -16,13 +16,6 @@
     .meter { height: 8px; background: #e6edf5; border-radius: 999px; overflow: hidden; margin-top: 6px; }
     .meter > div { height: 100%; background: #2b7de9; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-    .stats { border: 1px solid #d9e2ef; border-radius: 8px; padding: 10px; background: #fbfcff; margin-top: 14px; }
-    .stats-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
-    select { padding: 9px; border: 1px solid #c7d8ee; border-radius: 6px; background: #fff; }
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .stat-card { border: 1px solid #e1e8f2; border-radius: 8px; padding: 8px; background: #fff; }
-    .stat-title { font-size: 12px; color: #667; margin-bottom: 4px; }
-    .stat-value { font-size: 18px; font-weight: 700; color: #173c6b; }
   </style>
 </head>
 <body>
@@ -45,27 +38,6 @@
     <h3>Profile</h3>
     <div class="row"><input id="display" placeholder="Display name" /></div>
     <button onclick="saveProfile()">Save profile</button>
-
-    <h3 style="margin-top:18px">Service Analytics</h3>
-    <div class="stats">
-      <div class="stats-actions">
-        <select id="statsPeriod">
-          <option value="week" selected>Last 7 days</option>
-          <option value="month">Last 30 days</option>
-          <option value="all">All time</option>
-        </select>
-        <button class="ghost" onclick="loadStats()">Refresh</button>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-title">Tour unique visitors</div><div class="stat-value" id="stTourUnique">-</div></div>
-        <div class="stat-card"><div class="stat-title">Tour total time</div><div class="stat-value" id="stTourTime">-</div></div>
-        <div class="stat-card"><div class="stat-title">Home unique visitors</div><div class="stat-value" id="stHomeUnique">-</div></div>
-        <div class="stat-card"><div class="stat-title">New tours</div><div class="stat-value" id="stToursCreated">-</div></div>
-        <div class="stat-card"><div class="stat-title">New users</div><div class="stat-value" id="stUsersReg">-</div></div>
-        <div class="stat-card"><div class="stat-title">Checkouts</div><div class="stat-value" id="stCheckouts">-</div></div>
-      </div>
-      <p class="muted" id="statsAmount" style="margin-top:8px">-</p>
-    </div>
 
     <h3 style="margin-top:18px">Change password</h3>
     <div class="row"><input id="current" type="password" placeholder="Current password" /></div>
@@ -146,37 +118,10 @@ async function changePlan(planId) {
   });
   if (!outMock) return;
   msg.textContent = outMock.res.ok ? `Plan switched to ${planId}` : (outMock.data.error || 'Failed');
-  if (outMock.res.ok) { await loadMe(); await loadStats(); }
-}
-
-function fmtDuration(totalSec) {
-  const s = Math.max(0, Number(totalSec) || 0);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-async function loadStats() {
-  const period = (document.getElementById('statsPeriod') || {}).value || 'week';
-  const out = await api(`/api/analytics/summary?period=${encodeURIComponent(period)}`);
-  if (!out || !out.res.ok) {
-    statsAmount.textContent = out && out.data && out.data.error ? out.data.error : 'Failed to load analytics';
-    return;
-  }
-  const d = out.data || {};
-  stTourUnique.textContent = `${d.tour_visitors_unique ?? 0}`;
-  stTourTime.textContent = `${fmtDuration(d.tour_time_total_sec ?? 0)}`;
-  stHomeUnique.textContent = `${d.home_visitors_unique ?? 0}`;
-  stToursCreated.textContent = `${d.tours_created ?? 0}`;
-  stUsersReg.textContent = `${d.users_registered ?? 0}`;
-  stCheckouts.textContent = `${d.checkouts_count ?? 0}`;
-  const totalUsd = Number(d.checkouts_amount_total_cents || 0) / 100;
-  statsAmount.textContent = `Checkout amount total: $${totalUsd.toFixed(2)} (cents by currency: ${JSON.stringify(d.checkouts_amount_by_currency_cents || {})})`;
+  if (outMock.res.ok) await loadMe();
 }
 
 loadMe();
-loadStats();
 </script>
 </body>
 </html>
