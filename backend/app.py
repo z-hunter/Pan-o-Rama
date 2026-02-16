@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, send_file, g, redirect
+from flask import Flask, request, jsonify, send_from_directory, send_file, g, redirect, after_this_request
 import os
 import platform
 import time
@@ -21,6 +21,8 @@ import secrets
 import functools
 import threading
 import traceback
+import tempfile
+import zipfile
 
 try:
     import redis  # type: ignore
@@ -151,6 +153,7 @@ def inject_xmp_into_jpeg(jpeg_bytes, xmp_xml_bytes):
             # We are in entropy-coded data (should only happen after SOS), stop copying as segments.
             out += jpeg_bytes[i:]
             return bytes(out)
+
         # Skip fill bytes 0xFF..0xFF
         while i < len(jpeg_bytes) and jpeg_bytes[i] == 0xFF:
             i += 1
@@ -197,6 +200,76 @@ def inject_xmp_into_jpeg(jpeg_bytes, xmp_xml_bytes):
 
     # Fallback: if parsing failed, at least return original bytes (without modifications).
     return jpeg_bytes
+
+
+def add_directory_to_zip(zipf, root_dir):
+    for walk_root, _dirs, files in os.walk(root_dir):
+        for fname in files:
+            full_path = os.path.join(walk_root, fname)
+            rel_path = os.path.relpath(full_path, root_dir).replace("\\", "/")
+            zipf.write(full_path, rel_path)
+
+
+def build_self_hosted_readme(tour):
+    slug = (tour["slug"] or "tour").strip() or "tour"
+    return (
+        "PAN-O-RAMA SELF-HOSTED PACKAGE\n"
+        "================================\n\n"
+        "What is included:\n"
+        "- Player page: index.html\n"
+        "- Scene assets: <scene_id>/*\n"
+        "- Metadata: export-manifest.json\n"
+        "- License: EULA.txt\n\n"
+        f"Tour: {tour['title'] or 'Untitled'}\n"
+        f"Slug: {slug}\n\n"
+        "WordPress quick start:\n"
+        "1) Upload the extracted folder to your hosting (for example: /wp-content/uploads/panorama-tours/<tour>/).\n"
+        "2) Open the tour by URL, e.g.:\n"
+        f"   https://your-domain.com/wp-content/uploads/panorama-tours/{slug}/index.html\n"
+        "3) Embed in WordPress page/post using iframe block:\n"
+        "   <iframe src=\"https://your-domain.com/wp-content/uploads/panorama-tours/<tour>/index.html\"\n"
+        "           width=\"100%\" height=\"640\" style=\"border:0\" allowfullscreen></iframe>\n\n"
+        "Hosting notes:\n"
+        "- Keep all files and folders together; do not rename scene folders.\n"
+        "- Serve image files with normal static caching.\n"
+        "- If your site uses strict CSP/X-Frame-Options rules, allow embedding for this page.\n"
+    )
+
+
+def build_self_hosted_eula(tour):
+    title = (tour["title"] or "Untitled Tour").strip()
+    tid = (tour["id"] or "").strip()
+    return (
+        "END USER LICENSE AGREEMENT (EULA)\n"
+        "PAN-O-RAMA SELF-HOSTED TOUR PACKAGE\n\n"
+        "IMPORTANT: BY USING THIS PACKAGE, YOU AGREE TO THIS LICENSE.\n\n"
+        "1. License Grant\n"
+        "Licensor grants Licensee a non-exclusive, non-transferable license to host and display this package\n"
+        "only for the exported tour identified below.\n\n"
+        f"Licensed Tour: {title}\n"
+        f"Tour ID: {tid}\n\n"
+        "2. Permitted Use\n"
+        "Licensee may:\n"
+        "- Host this package on Licensee-controlled web infrastructure.\n"
+        "- Embed and display the tour on Licensee websites (including WordPress).\n\n"
+        "3. Restrictions\n"
+        "Licensee must NOT:\n"
+        "- Reuse, copy, redistribute, sublicense, sell, or provide the player code as a standalone product.\n"
+        "- Use the player code with any content other than the content included in this exported package.\n"
+        "- Extract the player code and integrate it into other projects, templates, SDKs, or services.\n"
+        "- Remove copyright/license notices from this package.\n\n"
+        "4. Ownership\n"
+        "All rights to the player software, code, and related IP remain with Licensor.\n"
+        "Only the limited use rights above are granted.\n\n"
+        "5. Termination\n"
+        "This license terminates automatically upon any breach.\n"
+        "Upon termination, Licensee must stop use and remove all hosted copies.\n\n"
+        "6. Warranty and Liability\n"
+        "This package is provided \"AS IS\" without warranties.\n"
+        "Licensor is not liable for indirect, incidental, or consequential damages.\n\n"
+        "7. Governing Terms\n"
+        "If a separate signed commercial agreement exists between Licensor and Licensee, that agreement prevails.\n"
+    )
 
 def detect_and_crop_overlap(image_path):
     """
@@ -2389,6 +2462,75 @@ def tours_export_facebook360(tour_id):
     except Exception as e:
         app.logger.error(f"FB360 export failed: {e}", exc_info=True)
         return jsonify({"error": "Failed to export Facebook 360 image"}), 500
+
+
+@app.route("/tours/<tour_id>/export/self-hosted", methods=["GET"])
+@require_auth
+def tours_export_self_hosted(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+
+    ent = get_user_entitlements(g.current_user["id"])
+    if ent.get("plan_id") != PLAN_BUSINESS:
+        return jsonify({"error": "Business plan required", "code": "business_plan_required"}), 403
+
+    try:
+        scenes = load_tour_scenes_and_hotspots(tour["id"])
+        if not scenes:
+            scenes = load_disk_metadata_scenes(tour["id"])
+        if not scenes:
+            scenes = load_disk_scenes_from_index_html(tour["id"])
+        if scenes:
+            # Regenerate index for latest player behavior before exporting.
+            generate_tour(
+                tour["id"],
+                scenes,
+                watermark_enabled=bool(ent.get("watermark_enabled")),
+                force_previews=False,
+            )
+
+        gallery_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour["id"])
+        if not os.path.isdir(gallery_dir):
+            return jsonify({"error": "Gallery folder not found"}), 404
+
+        fd, tmp_zip_path = tempfile.mkstemp(prefix=f"tour-{tour['id']}-", suffix=".zip")
+        os.close(fd)
+        with zipfile.ZipFile(tmp_zip_path, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            add_directory_to_zip(zf, gallery_dir)
+            export_manifest = {
+                "tour_id": tour["id"],
+                "slug": tour["slug"],
+                "title": tour["title"],
+                "exported_at": now_iso(),
+                "format": "self_hosted_static",
+            }
+            zf.writestr("export-manifest.json", json.dumps(export_manifest, ensure_ascii=False, indent=2))
+            zf.writestr("README_SELF_HOSTED.txt", build_self_hosted_readme(tour))
+            zf.writestr("EULA.txt", build_self_hosted_eula(tour))
+
+        @after_this_request
+        def _cleanup_tmp_zip(resp):
+            try:
+                if os.path.exists(tmp_zip_path):
+                    os.remove(tmp_zip_path)
+            except Exception:
+                pass
+            return resp
+
+        safe_slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", (tour["slug"] or "tour")).strip("-") or "tour"
+        out_name = f"{safe_slug}-self-hosted.zip"
+        return send_file(
+            tmp_zip_path,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=out_name,
+            max_age=0,
+        )
+    except Exception as e:
+        app.logger.error(f"Self-hosted export failed: {e}", exc_info=True)
+        return jsonify({"error": "Failed to export self-hosted package"}), 500
+
 
 @app.route("/tours/<tour_id>/hotspots/bulk", methods=["POST"])
 @require_auth

@@ -11,7 +11,7 @@
         .app-header { background: #2a2a2a; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #444; }
         .logo-small { height: 40px; }
         .main-container { display: flex; flex: 1; overflow: hidden; }
-        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100%; box-sizing: border-box; }
+        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100%; min-height: 0; overflow-y: auto; box-sizing: border-box; }
         .viewer-container { flex: 1; position: relative; background: #000; height: 100%; }
         #pano-editor { width: 100%; height: 100%; }
         .step { display: none; }
@@ -233,6 +233,8 @@
                             <button class="btn btn-primary" style="width:100%;" type="button" onclick="downloadFacebook360FirstScene()">Download FB 360 (First Scene)</button>
                             <button class="btn btn-ghost" style="width:100%; margin-top:8px;" type="button" onclick="copyFullTourShareLink()">Copy Full Tour Link</button>
                         </div>
+                        <button class="btn btn-ghost" id="exportSelfHostedBtn" style="width:100%; margin-top:10px;" type="button" onclick="exportSelfHostedPackage()">Export Self-Hosted Package</button>
+                        <button class="btn btn-primary" id="upgradeBusinessBtn" style="display:none; width:100%; margin-top:8px;" type="button" onclick="window.location.href='/account'">Upgrade to Business Plan</button>
                         <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Scenes</button>
                     </div>
                 </div>
@@ -287,6 +289,7 @@
         let scenes = [];
         let activeSceneId = null;
         let viewer = null;
+        let currentPlanId = null;
         let lastClickCoords = null;
         const prefetchCache = new Set();
         const jobPollers = new Map(); // job_id -> true
@@ -305,6 +308,24 @@
                 return null;
             }
             return res;
+        }
+
+        function refreshPlanGatedActions() {
+            const exportBtn = document.getElementById('exportSelfHostedBtn');
+            const upgradeBtn = document.getElementById('upgradeBusinessBtn');
+            if (!exportBtn) return;
+            const isBusiness = currentPlanId === 'business';
+            exportBtn.disabled = !isBusiness;
+            exportBtn.title = isBusiness ? '' : 'Business plan required';
+            if (upgradeBtn) upgradeBtn.style.display = isBusiness ? 'none' : 'block';
+        }
+
+        async function loadCurrentUser() {
+            const res = await apiFetch('/me', { method: 'GET' });
+            if (!res || !res.ok) return;
+            const me = await res.json();
+            currentPlanId = (me && me.plan && me.plan.id) ? String(me.plan.id) : null;
+            refreshPlanGatedActions();
         }
 
         async function loadExistingTour(tourId) {
@@ -857,6 +878,47 @@
             }
         }
 
+        async function exportSelfHostedPackage() {
+            if (!projectId) {
+                alert('No tour loaded');
+                return;
+            }
+            if (currentPlanId !== 'business') {
+                const go = confirm('Self-hosted export is available on Business plan. Open billing page to upgrade?');
+                if (go) window.location.href = '/account';
+                return;
+            }
+            setLoading(true, "Packaging self-hosted export...");
+            try {
+                const res = await apiFetch(`/tours/${projectId}/export/self-hosted`, { method: 'GET' });
+                if (!res) return;
+                if (!res.ok) {
+                    let msg = 'Export failed';
+                    try {
+                        const data = await res.json();
+                        msg = data.error || msg;
+                    } catch (_) {}
+                    alert(msg);
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                let filename = 'self-hosted-tour.zip';
+                const cd = res.headers.get('Content-Disposition') || '';
+                const m = cd.match(/filename\\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+                if (m) filename = decodeURIComponent(m[1] || m[2] || filename);
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } finally {
+                setLoading(false);
+            }
+        }
+
         async function copyFullTourShareLink() {
             if (!projectId) {
                 alert('No tour loaded');
@@ -939,6 +1001,8 @@
         }
 
         (async function bootstrap() {
+            refreshPlanGatedActions();
+            await loadCurrentUser();
             const tourId = getTourIdFromQuery();
             if (tourId) {
                 await loadExistingTour(tourId);
