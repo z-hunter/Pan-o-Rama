@@ -2953,6 +2953,18 @@ def analytics_tour_start():
     return jsonify({"ok": True}), 200
 
 
+@app.route("/api/analytics/home", methods=["POST"])
+def analytics_home_view():
+    analytics_track(
+        "home_view",
+        visitor_id=getattr(g, "visitor_id", None),
+        user_id=(g.current_user["id"] if g.current_user is not None else None),
+        path=request.path,
+        meta={"referrer": request.headers.get("Referer"), "ua": request.headers.get("User-Agent", "")[:180]},
+    )
+    return jsonify({"ok": True}), 200
+
+
 @app.route("/analytics/tour/end", methods=["POST"])
 @app.route("/api/analytics/tour/end", methods=["POST"])
 def analytics_tour_end():
