@@ -2537,12 +2537,32 @@ def tours_finalize(tour_id):
     tour, err = fetch_tour_with_access(tour_id, require_owner=True)
     if err:
         return err
+    db = get_db()
+    pending_row = db.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM scenes
+        WHERE tour_id = ? AND processing_status IS NOT NULL AND processing_status != 'ready'
+        """,
+        (tour["id"],),
+    ).fetchone()
+    pending_count = int((pending_row["n"] or 0) if pending_row else 0)
+    if pending_count > 0:
+        return jsonify(
+            {
+                "error": f"Cannot publish while {pending_count} scene(s) are still processing",
+                "code": "scenes_processing",
+                "pending_scenes": pending_count,
+            }
+        ), 409
     scenes = load_tour_scenes_and_hotspots(tour["id"])
     if not scenes:
         return jsonify({"error": "Tour must have at least one scene"}), 400
+    ready_scenes = [s for s in scenes if (not s.get("processing_status") or s.get("processing_status") == "ready") and (s.get("panorama") or (s.get("images") or [None])[0])]
+    if not ready_scenes:
+        return jsonify({"error": "Tour must have at least one READY scene with panorama"}), 400
     ent = get_user_entitlements(g.current_user["id"])
     gallery_url = generate_tour(tour["id"], scenes, watermark_enabled=ent["watermark_enabled"])
-    db = get_db()
     db.execute("UPDATE tours SET status = 'published', updated_at = ? WHERE id = ?", (now_iso(), tour["id"]))
     db.commit()
     share_url = f"/t/{tour['slug']}"

@@ -481,8 +481,25 @@
             const data = await res.json();
             if (!res.ok || !data.tour) return;
             scenes = data.tour.scenes || [];
+            ensurePendingJobPollers();
             updateScenesUI();
             document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
+        }
+
+        function getReadyScenes() {
+            return scenes.filter(s => (!s.processing_status || s.processing_status === 'ready') && (s.panorama || (s.images && s.images[0])));
+        }
+
+        function getPendingScenes() {
+            return scenes.filter(s => s.processing_status && s.processing_status !== 'ready');
+        }
+
+        function ensurePendingJobPollers() {
+            for (const s of scenes) {
+                if (s && s.job_id && s.processing_status && s.processing_status !== 'ready') {
+                    pollJobUntilTerminal(s.job_id, { refreshTourOnDone: true, showLoader: false });
+                }
+            }
         }
 
         function updateScenesUI() {
@@ -504,6 +521,15 @@
                 div.onclick = () => loadScene(s.id);
                 list.appendChild(div);
             });
+            const linkBtn = document.getElementById('gotoStep3');
+            if (linkBtn) {
+                const readyCount = getReadyScenes().length;
+                const pendingCount = getPendingScenes().length;
+                linkBtn.disabled = readyCount === 0;
+                linkBtn.title = readyCount === 0
+                    ? (pendingCount > 0 ? `Scenes are still processing (${pendingCount}). Wait until at least one is ready.` : 'Add at least one scene')
+                    : '';
+            }
             list.querySelectorAll('button[data-scene-delete]').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.preventDefault();
@@ -585,7 +611,7 @@
 
                     const select = document.getElementById('targetScene');
                     select.innerHTML = '<option value="">Select Destination...</option>';
-                    scenes.filter(s => s.id !== activeSceneId).forEach(s => {
+                    getReadyScenes().filter(s => s.id !== activeSceneId).forEach(s => {
                         select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
                     });
                 }
@@ -767,7 +793,18 @@
         }
 
         function startLinking() {
-            if (!activeSceneId && scenes.length > 0) loadScene(scenes[0].id);
+            const ready = getReadyScenes();
+            const pending = getPendingScenes();
+            if (ready.length === 0) {
+                if (pending.length > 0) {
+                    alert(`Scenes are still processing (${pending.length}). Wait until they become READY.`);
+                    ensurePendingJobPollers();
+                    return;
+                }
+                alert('Add at least one scene first.');
+                return;
+            }
+            if (!activeSceneId || !ready.find(s => s.id === activeSceneId)) loadScene(ready[0].id);
             showStep(3);
             document.getElementById('editorHud').style.display = 'block';
         }
@@ -814,6 +851,17 @@
 
         async function finalizeTour() {
             if (!projectId) return;
+            const pending = getPendingScenes();
+            if (pending.length > 0) {
+                alert(`Cannot publish yet: ${pending.length} scene(s) are still processing (QUEUED/RUNNING).`);
+                ensurePendingJobPollers();
+                return;
+            }
+            const ready = getReadyScenes();
+            if (ready.length === 0) {
+                alert('Tour must have at least one READY scene.');
+                return;
+            }
             setLoading(true, "Finalizing Tour...");
             const hotspotData = {};
             scenes.forEach(s => hotspotData[s.id] = s.hotspots || []);
@@ -835,7 +883,9 @@
                 if (!res) return;
                 const data = await res.json();
                 if (!res.ok) {
-                    alert(data.error || 'Finalize failed');
+                    const msg = data && data.error ? data.error : 'Finalize failed';
+                    alert(msg);
+                    if (data && data.code === 'scenes_processing') ensurePendingJobPollers();
                     return;
                 }
                 if (data.gallery_url) window.open(data.gallery_url, '_blank');
@@ -1015,6 +1065,7 @@
             if (tourId) {
                 await loadExistingTour(tourId);
             }
+            ensurePendingJobPollers();
         })();
     </script>
 </body>
