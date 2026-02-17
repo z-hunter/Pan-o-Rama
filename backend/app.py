@@ -1827,6 +1827,21 @@ def get_user_entitlements(user_id):
         },
     }
 
+def current_user_is_business():
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return False
+    ent = get_user_entitlements(user["id"])
+    return ent.get("plan_id") == PLAN_BUSINESS
+
+def can_view_private_tour(tour_row):
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return False
+    if user["id"] == tour_row["owner_id"]:
+        return True
+    return current_user_is_business()
+
 def fetch_tour_with_access(tour_id, require_owner=False):
     db = get_db()
     row = db.execute(
@@ -1840,7 +1855,7 @@ def fetch_tour_with_access(tour_id, require_owner=False):
     is_owner = user is not None and user["id"] == row["owner_id"]
     if require_owner and not is_owner:
         return None, (jsonify({"error": "Forbidden"}), 403)
-    if row["visibility"] == "private" and not is_owner:
+    if row["visibility"] == "private" and not can_view_private_tour(row):
         return None, (jsonify({"error": "Forbidden"}), 403)
     return row, None
 
@@ -2199,7 +2214,7 @@ def tours_create():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip() or "Untitled Tour"
     description = (data.get("description") or "").strip()
-    visibility = normalize_visibility(data.get("visibility"))
+    visibility = normalize_visibility(data.get("visibility") or "public")
     tid = str(uuid.uuid4())
     ts = now_iso()
     slug = slugify(title)
@@ -2979,14 +2994,24 @@ def billing_webhook_stripe():
 @app.route("/gallery", methods=["GET"])
 def public_gallery():
     db = get_db()
-    rows = db.execute(
-        """
-        SELECT id, slug, title, description, created_at
-        FROM tours
-        WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
-        ORDER BY created_at DESC
-        """
-    ).fetchall()
+    if current_user_is_business():
+        rows = db.execute(
+            """
+            SELECT id, slug, title, description, created_at
+            FROM tours
+            WHERE deleted_at IS NULL AND status = 'published'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """
+            SELECT id, slug, title, description, created_at
+            FROM tours
+            WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
     return jsonify({"items": [dict(r) for r in rows]}), 200
 
 
@@ -3082,8 +3107,7 @@ def open_share_link(slug):
     ).fetchone()
     if tour is None:
         return jsonify({"error": "Tour not found"}), 404
-    is_owner = g.current_user is not None and g.current_user["id"] == tour["owner_id"]
-    if tour["visibility"] == "private" and not is_owner:
+    if tour["visibility"] == "private" and not can_view_private_tour(tour):
         return jsonify({"error": "Forbidden"}), 403
     return redirect(f"/galleries/{tour['id']}/index.html", code=302)
 
@@ -3133,14 +3157,24 @@ def browse_page():
 def list_projects():
     try:
         db = get_db()
-        rows = db.execute(
-            """
-            SELECT id, title, description, slug, created_at
-            FROM tours
-            WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
+        if current_user_is_business():
+            rows = db.execute(
+                """
+                SELECT id, title, description, slug, created_at
+                FROM tours
+                WHERE deleted_at IS NULL AND status = 'published'
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """
+                SELECT id, title, description, slug, created_at
+                FROM tours
+                WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
         projects = []
         for r in rows:
             projects.append(
@@ -4171,8 +4205,7 @@ def serve_gallery_files(project_id, filename):
         (project_id,),
     ).fetchone()
     if tour is not None and tour["visibility"] == "private":
-        user = g.current_user
-        if user is None or user["id"] != tour["owner_id"]:
+        if not can_view_private_tour(tour):
             return jsonify({"error": "Forbidden"}), 403
     if filename == "index.html":
         # Backward-compatible: older published tours may have a static index.html without the latest

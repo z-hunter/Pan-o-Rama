@@ -355,7 +355,7 @@
                 const res = await apiFetch('/tours', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: 'Untitled Tour', visibility: 'private' })
+                    body: JSON.stringify({ title: 'Untitled Tour', visibility: 'public' })
                 });
                 if (!res) return;
                 const data = await res.json();
