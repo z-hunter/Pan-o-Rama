@@ -110,14 +110,22 @@ async function changePlan(planId) {
     window.location.href = outCheckout.data.url;
     return;
   }
-
+  // In production billing flows, never auto-fallback to mock subscribe.
+  // Allow mock only for local/dev troubleshooting via explicit query flag.
+  const canUseMock =
+    window.location.hostname === 'localhost' ||
+    new URLSearchParams(window.location.search).get('useMockBilling') === '1';
+  if (!canUseMock) {
+    msg.textContent = (outCheckout && outCheckout.data && outCheckout.data.error) || 'Checkout failed';
+    return;
+  }
   const outMock = await api('/billing/mock/subscribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ plan_id: planId })
   });
   if (!outMock) return;
-  msg.textContent = outMock.res.ok ? `Plan switched to ${planId}` : (outMock.data.error || 'Failed');
+  msg.textContent = outMock.res.ok ? `Plan switched to ${planId} (mock)` : (outMock.data.error || 'Failed');
   if (outMock.res.ok) await loadMe();
 }
 

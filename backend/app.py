@@ -23,6 +23,8 @@ import threading
 import traceback
 import tempfile
 import zipfile
+import urllib.request
+import urllib.error
 
 try:
     import redis  # type: ignore
@@ -66,6 +68,7 @@ WEB_PANO_FILENAME = "web.jpg"
 GALLERY_TEMPLATE_VERSION = 35
 VISITOR_COOKIE_NAME = "lo_vid"
 ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
+EMAIL_VERIFICATION_TTL_SEC = 24 * 60 * 60
 
 @app.route("/__debug/version")
 def debug_version():
@@ -1246,6 +1249,8 @@ def init_db():
                 display_name TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
                 is_admin INTEGER NOT NULL DEFAULT 0,
+                email_verified INTEGER NOT NULL DEFAULT 1,
+                email_verified_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -1370,6 +1375,15 @@ def init_db():
 	                    meta_json TEXT NOT NULL DEFAULT '{}',
 	                    created_at TEXT NOT NULL
 	                );
+                    CREATE TABLE IF NOT EXISTS email_verification_tokens (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        token_hash TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        used_at TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
 	                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
 	                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
 	                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
@@ -1381,6 +1395,8 @@ def init_db():
 	                CREATE INDEX IF NOT EXISTS idx_analytics_type_time ON analytics_events(event_type, created_at);
 	                CREATE INDEX IF NOT EXISTS idx_analytics_visitor_time ON analytics_events(visitor_id, created_at);
 	                CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_dedupe ON analytics_events(dedupe_key);
+                    CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id, created_at);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_verify_token_hash ON email_verification_tokens(token_hash);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -1397,6 +1413,11 @@ def init_db():
             db.execute("ALTER TABLE scenes ADD COLUMN processing_error TEXT")
         if "job_id" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN job_id TEXT")
+        user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
+        if "email_verified" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
+        if "email_verified_at" not in user_cols:
+            db.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
         ts = now_iso()
         for plan_id, d in DEFAULT_PLAN_DEFS.items():
             db.execute(
@@ -1412,6 +1433,81 @@ def init_db():
 
 def hash_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def app_base_url():
+    return (os.getenv("APP_BASE_URL") or request.url_root.rstrip("/")).strip()
+
+def email_verification_enabled():
+    raw = (os.getenv("EMAIL_VERIFICATION_ENABLED") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+def create_email_verification_token(user_id):
+    token = secrets.token_urlsafe(48)
+    token_hash = hash_token(token)
+    ts = now_iso()
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=EMAIL_VERIFICATION_TTL_SEC)).replace(microsecond=0).isoformat() + "Z"
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
+        VALUES (?, ?, ?, ?, NULL, ?)
+        """,
+        (str(uuid.uuid4()), user_id, token_hash, expires, ts),
+    )
+    db.commit()
+    return token
+
+def send_verification_email(recipient_email, token):
+    api_key = (os.getenv("RESEND_API_KEY") or "").strip()
+    mail_from = (os.getenv("MAIL_FROM") or "").strip()
+    if not api_key or not mail_from:
+        app.logger.warning("Email verification: RESEND_API_KEY or MAIL_FROM is missing; skipping send")
+        return False, "mail_not_configured"
+    verify_url = f"{app_base_url()}/auth/verify?token={token}"
+    payload = {
+        "from": mail_from,
+        "to": [recipient_email],
+        "subject": "Confirm your Pan-o-Rama account",
+        "html": (
+            "<p>Welcome to Pan-o-Rama.</p>"
+            "<p>Confirm your email to activate your account:</p>"
+            f"<p><a href=\"{verify_url}\">{verify_url}</a></p>"
+            "<p>This link expires in 24 hours.</p>"
+        ),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Pan-o-Rama/1.0 (+https://pan-o-rama.online)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            ok = 200 <= resp.status < 300
+            if not ok:
+                return False, f"resend_http_{resp.status}"
+            return True, None
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        app.logger.warning("Resend HTTPError %s: %s", e.code, body[:500])
+        return False, f"resend_http_{e.code}"
+    except Exception as e:
+        app.logger.warning("Resend send failed: %s", e)
+        return False, "resend_send_failed"
+
+def queue_verification_email(user_id, email):
+    token = create_email_verification_token(user_id)
+    ok, err = send_verification_email(email, token)
+    return ok, err
 
 def get_current_user():
     token = request.cookies.get("session_token")
@@ -2042,14 +2138,29 @@ def auth_register():
         return jsonify({"error": "Email already exists"}), 409
     uid = str(uuid.uuid4())
     ts = now_iso()
+    verify_on = email_verification_enabled()
+    email_verified = 0 if verify_on else 1
+    email_verified_at = None if verify_on else ts
     db.execute(
-        "INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (uid, email, generate_password_hash(password), display_name or "User", ts, ts),
+        "INSERT INTO users (id, email, password_hash, display_name, email_verified, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (uid, email, generate_password_hash(password), display_name or "User", email_verified, email_verified_at, ts, ts),
     )
     db.commit()
     set_user_plan(uid, PLAN_FREE, provider="mock")
-    row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
-    return create_session_response(row), 201
+    if not verify_on:
+        row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+        return create_session_response(row), 201
+    ok, err = queue_verification_email(uid, email)
+    return (
+        jsonify(
+            {
+                "message": "Registration successful. Check your email to verify your account.",
+                "email_sent": bool(ok),
+                "email_error": err,
+            }
+        ),
+        201,
+    )
 
 @app.route("/auth/login", methods=["POST"])
 def auth_login():
@@ -2060,7 +2171,57 @@ def auth_login():
     row = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
         return jsonify({"error": "Invalid credentials"}), 401
+    if email_verification_enabled() and int(row["email_verified"] or 0) != 1:
+        return jsonify({"error": "Please verify your email before login", "code": "email_not_verified"}), 403
     return create_session_response(row), 200
+
+@app.route("/auth/verification/resend", methods=["POST"])
+def auth_verification_resend():
+    if not email_verification_enabled():
+        return jsonify({"message": "Email verification is temporarily disabled"}), 200
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if "@" not in email:
+        return jsonify({"error": "Invalid email"}), 400
+    db = get_db()
+    row = db.execute("SELECT id, email_verified FROM users WHERE email = ?", (email,)).fetchone()
+    if row is None:
+        return jsonify({"message": "If the account exists, verification email has been sent"}), 200
+    if int(row["email_verified"] or 0) == 1:
+        return jsonify({"message": "Email is already verified"}), 200
+    ok, err = queue_verification_email(row["id"], email)
+    return jsonify({"message": "Verification email sent", "email_sent": bool(ok), "email_error": err}), 200
+
+@app.route("/auth/verify", methods=["GET"])
+def auth_verify():
+    token = (request.args.get("token") or "").strip()
+    if not token:
+        return redirect("/login?verified=0&reason=missing_token", code=302)
+    token_hash = hash_token(token)
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT t.id AS token_id, t.user_id, t.expires_at, t.used_at, u.email_verified
+        FROM email_verification_tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = ?
+        """,
+        (token_hash,),
+    ).fetchone()
+    if row is None:
+        return redirect("/login?verified=0&reason=invalid_token", code=302)
+    if row["used_at"] is not None:
+        return redirect("/login?verified=1", code=302)
+    if row["expires_at"] <= now_iso():
+        return redirect("/login?verified=0&reason=expired", code=302)
+    ts = now_iso()
+    db.execute(
+        "UPDATE users SET email_verified = 1, email_verified_at = ?, updated_at = ? WHERE id = ?",
+        (ts, ts, row["user_id"]),
+    )
+    db.execute("UPDATE email_verification_tokens SET used_at = ? WHERE id = ?", (ts, row["token_id"]))
+    db.commit()
+    return redirect("/login?verified=1", code=302)
 
 @app.route("/auth/logout", methods=["POST"])
 def auth_logout():
@@ -2082,6 +2243,7 @@ def me_get():
         {
             "id": u["id"],
             "email": u["email"],
+            "email_verified": bool(int(u["email_verified"] or 0)),
             "display_name": u["display_name"],
             "plan": {
                 "id": ent["plan_id"],
@@ -2324,7 +2486,6 @@ def tours_add_scene(tour_id):
             (sid, tour["id"], name, order_index, ts, ts),
         )
         db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
-        db.commit()
 
         payload = {
             "tour_id": tour["id"],
@@ -2334,9 +2495,21 @@ def tours_add_scene(tour_id):
             "raw_paths": saved_raw,
             "order_index": order_index,
         }
-        jid = jobs_create("scene_process", g.current_user["id"], payload, tour_id=tour["id"], scene_id=sid)
-        db.execute("UPDATE scenes SET job_id = ?, updated_at = ? WHERE id = ? AND tour_id = ?", (jid, now_iso(), sid, tour["id"]))
-        db.commit()
+        try:
+            jid = jobs_create("scene_process", g.current_user["id"], payload, tour_id=tour["id"], scene_id=sid)
+            db.execute(
+                "UPDATE scenes SET job_id = ?, updated_at = ? WHERE id = ? AND tour_id = ?",
+                (jid, now_iso(), sid, tour["id"]),
+            )
+            db.commit()
+        except Exception:
+            # Do not leave permanent queued scenes without a job reference.
+            db.execute(
+                "UPDATE scenes SET processing_status = 'failed', processing_error = ?, updated_at = ? WHERE id = ? AND tour_id = ?",
+                ("Failed to enqueue processing job", now_iso(), sid, tour["id"]),
+            )
+            db.commit()
+            raise
         row = db.execute("SELECT * FROM scenes WHERE id = ? AND tour_id = ?", (sid, tour["id"])).fetchone()
         return jsonify({"job_id": jid, "scene": serialize_scene(row)}), 202
 
@@ -2843,6 +3016,10 @@ def find_user_id_for_checkout_object(obj):
 @app.route("/billing/mock/subscribe", methods=["POST"])
 @require_auth
 def billing_mock_subscribe():
+    # Safety guard: in production-like modes we must not silently switch plans via mock endpoint.
+    # This endpoint is for local/dev workflows only.
+    if get_billing_mode() in {"hybrid", "stripe"} and (os.getenv("ALLOW_MOCK_SUBSCRIBE") or "").strip() not in {"1", "true", "yes", "on"}:
+        return jsonify({"error": "Mock subscribe is disabled in this environment"}), 403
     data = request.get_json(silent=True) or {}
     plan_id = parse_plan_id(data.get("plan_id"))
     if plan_id is None:
@@ -3107,7 +3284,8 @@ def open_share_link(slug):
     ).fetchone()
     if tour is None:
         return jsonify({"error": "Tour not found"}), 404
-    if tour["visibility"] == "private" and not can_view_private_tour(tour):
+    visibility = (tour["visibility"] or "").strip().lower()
+    if visibility == "private" and not can_view_private_tour(tour):
         return jsonify({"error": "Forbidden"}), 403
     return redirect(f"/galleries/{tour['id']}/index.html", code=302)
 
@@ -4201,10 +4379,10 @@ def finalize_project(project_id):
 def serve_gallery_files(project_id, filename):
     db = get_db()
     tour = db.execute(
-        "SELECT owner_id, visibility FROM tours WHERE id = ? AND deleted_at IS NULL",
+        "SELECT owner_id, visibility, status FROM tours WHERE id = ? AND deleted_at IS NULL",
         (project_id,),
     ).fetchone()
-    if tour is not None and tour["visibility"] == "private":
+    if tour is not None and (tour["visibility"] or "").strip().lower() == "private":
         if not can_view_private_tour(tour):
             return jsonify({"error": "Forbidden"}), 403
     if filename == "index.html":

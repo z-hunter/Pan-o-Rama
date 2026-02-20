@@ -24,6 +24,7 @@
     <div class="row"><input id="displayName" type="text" placeholder="Display name (for register)" /></div>
     <button onclick="login()">Login</button>
     <button class="alt" onclick="register()">Register</button>
+    <button class="alt" onclick="resendVerification()">Resend verification email</button>
     <p class="msg" id="msg"></p>
     <p><a href="/">Back to editor</a></p>
   </div>
@@ -32,11 +33,47 @@ async function login() {
   await auth('/auth/login', { email: email.value.trim(), password: password.value });
 }
 async function register() {
-  await auth('/auth/register', {
+  msg.textContent = '';
+  const payload = {
     email: email.value.trim(),
     password: password.value,
     display_name: displayName.value.trim()
+  };
+  const res = await fetch('/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.textContent = data.error || 'Register failed';
+    return;
+  }
+  if (data.user) {
+    window.location.href = '/dashboard';
+    return;
+  }
+  msg.textContent = 'Registration successful. Please check your email and confirm your account.';
+}
+
+async function resendVerification() {
+  msg.textContent = '';
+  const e = email.value.trim();
+  if (!e) {
+    msg.textContent = 'Enter your email first.';
+    return;
+  }
+  const res = await fetch('/auth/verification/resend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: e })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.textContent = data.error || 'Failed to resend verification email';
+    return;
+  }
+  msg.textContent = data.message || 'Verification email sent';
 }
 async function auth(url, payload) {
   msg.textContent = '';
@@ -47,11 +84,29 @@ async function auth(url, payload) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (data.code === 'email_not_verified') {
+      msg.textContent = 'Please verify your email first. Use "Resend verification email" if needed.';
+      return;
+    }
     msg.textContent = data.error || 'Request failed';
     return;
   }
   window.location.href = '/dashboard';
 }
+
+(function initLoginHints() {
+  const p = new URLSearchParams(window.location.search);
+  const verified = p.get('verified');
+  const reason = p.get('reason');
+  if (verified === '1') {
+    msg.textContent = 'Email confirmed. You can now log in.';
+    return;
+  }
+  if (verified === '0') {
+    if (reason === 'expired') msg.textContent = 'Verification link expired. Request a new email.';
+    else msg.textContent = 'Invalid verification link. Request a new email.';
+  }
+})();
 </script>
 </body>
 </html>
