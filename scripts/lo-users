@@ -4,4 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-python3 "${ROOT_DIR}/scripts/list_users.py" --db "${ROOT_DIR}/data/app.db" "$@"
+if [[ -f "${ROOT_DIR}/scripts/list_users.py" && -f "${ROOT_DIR}/data/app.db" ]]; then
+  PY_SCRIPT="${ROOT_DIR}/scripts/list_users.py"
+  DB_PATH="${ROOT_DIR}/data/app.db"
+elif [[ -f "/home/debian/lokalny_obiektyw/scripts/list_users.py" && -f "/home/debian/lokalny_obiektyw/data/app.db" ]]; then
+  PY_SCRIPT="/home/debian/lokalny_obiektyw/scripts/list_users.py"
+  DB_PATH="/home/debian/lokalny_obiektyw/data/app.db"
+else
+  echo "Could not find list_users.py/app.db. Run from repo root or install on server path." >&2
+  exit 1
+fi
+
+python3 "${PY_SCRIPT}" --db "${DB_PATH}" "$@"
