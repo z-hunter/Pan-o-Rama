@@ -47,9 +47,12 @@
                 projects.forEach(project => {
                     const card = document.createElement('div');
                     card.className = 'project-card';
+                    const preview = project.cover_url
+                        ? `<img class="project-preview" src="${project.cover_url}" alt="Tour cover" loading="lazy">`
+                        : `<div class="project-preview" style="display:flex; align-items:center; justify-content:center; color:#999;">Public Tour</div>`;
 
                     card.innerHTML = `
-                        <div class="project-preview" style="display:flex; align-items:center; justify-content:center; color:#999;">Public Tour</div>
+                        ${preview}
                         <div class="project-info">
                             <h3>${project.title || 'Untitled Tour'}</h3>
                             <p>${project.description || 'No description'}</p>

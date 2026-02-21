@@ -65,6 +65,8 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
+COVER_FILENAME = "cover.jpg"
+COVER_META_FILENAME = "cover.meta.json"
 GALLERY_TEMPLATE_VERSION = 35
 VISITOR_COOKIE_NAME = "lo_vid"
 ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
@@ -980,6 +982,126 @@ def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_P
         return web_filename
     except Exception as e:
         app.logger.warning(f"Web pano generation failed: {e}")
+        return None
+
+def ensure_tour_cover_image(tour_row):
+    """
+    Create/update a cached tour cover image from the configured start scene.
+    Returns a relative URL (galleries/<tour_id>/cover.jpg) or None.
+    """
+    if tour_row is None:
+        return None
+    tour_id = tour_row["id"]
+    db = get_db()
+    start_scene_id = tour_row["start_scene_id"] if "start_scene_id" in tour_row.keys() else None
+    if start_scene_id:
+        scene = db.execute(
+            "SELECT * FROM scenes WHERE id = ? AND tour_id = ?",
+            (start_scene_id, tour_id),
+        ).fetchone()
+    else:
+        scene = None
+    if scene is None:
+        scene = db.execute(
+            "SELECT * FROM scenes WHERE tour_id = ? ORDER BY order_index ASC LIMIT 1",
+            (tour_id,),
+        ).fetchone()
+    if scene is None:
+        return None
+
+    pano_name = (scene["panorama_path"] or "").strip()
+    if not pano_name:
+        try:
+            imgs = json.loads(scene["images_json"] or "[]")
+        except Exception:
+            imgs = []
+        pano_name = (imgs[0] if imgs else "") or ""
+    if not pano_name:
+        return None
+
+    scene_dir = os.path.join(PROCESSED_FOLDER, tour_id, scene["id"])
+    src_path = os.path.join(scene_dir, pano_name)
+    if not os.path.exists(src_path):
+        return None
+
+    out_dir = os.path.join(PROCESSED_FOLDER, tour_id)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, COVER_FILENAME)
+    meta_path = os.path.join(out_dir, COVER_META_FILENAME)
+
+    try:
+        yaw = float(tour_row["start_yaw"]) if ("start_yaw" in tour_row.keys() and tour_row["start_yaw"] is not None) else 0.0
+    except Exception:
+        yaw = 0.0
+    try:
+        pitch = float(tour_row["start_pitch"]) if ("start_pitch" in tour_row.keys() and tour_row["start_pitch"] is not None) else 0.0
+    except Exception:
+        pitch = 0.0
+
+    sig = {
+        "scene_id": scene["id"],
+        "source_file": pano_name,
+        "yaw": round(yaw, 2),
+        "pitch": round(pitch, 2),
+    }
+    if os.path.exists(out_path) and os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            if old == sig:
+                return f"/galleries/{tour_id}/{COVER_FILENAME}"
+        except Exception:
+            pass
+
+    try:
+        old_max = getattr(Image, "MAX_IMAGE_PIXELS", None)
+        try:
+            Image.MAX_IMAGE_PIXELS = None
+        except Exception:
+            pass
+        with Image.open(src_path) as im:
+            im = ImageOps.exif_transpose(im)
+            if im.mode in ("RGBA", "P"):
+                im = im.convert("RGB")
+            w, h = im.size
+            if w <= 0 or h <= 0:
+                return None
+
+            # Crop a 3:2 "window" from equirectangular source around configured start yaw/pitch.
+            target_aspect = 3.0 / 2.0
+            crop_h = int(min(h, max(2, round(w / target_aspect))))
+            crop_w = int(max(2, round(crop_h * target_aspect)))
+
+            center_x = int(((yaw % 360.0) / 360.0) * w)
+            center_y = int((h / 2.0) - (pitch / 180.0) * h)
+            center_y = max(crop_h // 2, min(h - crop_h // 2, center_y))
+
+            left = center_x - crop_w // 2
+            top = center_y - crop_h // 2
+            top = max(0, min(h - crop_h, top))
+
+            # Wrap horizontally at pano seam for yaw near 0/360.
+            tiled = Image.new("RGB", (w * 2, h))
+            tiled.paste(im, (0, 0))
+            tiled.paste(im, (w, 0))
+            left_wrapped = left % w
+            cover = tiled.crop((left_wrapped, top, left_wrapped + crop_w, top + crop_h))
+
+            try:
+                resample = Image.Resampling.LANCZOS
+            except Exception:
+                resample = Image.LANCZOS
+            cover = cover.resize((1200, 800), resample=resample)
+            cover.save(out_path, "JPEG", quality=84, optimize=True, progressive=True, subsampling=0)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(sig, f)
+        try:
+            Image.MAX_IMAGE_PIXELS = old_max
+        except Exception:
+            pass
+        return f"/galleries/{tour_id}/{COVER_FILENAME}"
+    except Exception as e:
+        app.logger.warning("Cover generation failed for %s: %s", tour_id, e)
         return None
 
 
@@ -3507,7 +3629,7 @@ def list_projects():
         if current_user_is_business():
             rows = db.execute(
                 """
-                SELECT id, title, description, slug, created_at
+                SELECT id, title, description, slug, created_at, start_scene_id, start_yaw, start_pitch
                 FROM tours
                 WHERE deleted_at IS NULL AND status = 'published'
                 ORDER BY created_at DESC
@@ -3516,7 +3638,7 @@ def list_projects():
         else:
             rows = db.execute(
                 """
-                SELECT id, title, description, slug, created_at
+                SELECT id, title, description, slug, created_at, start_scene_id, start_yaw, start_pitch
                 FROM tours
                 WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
                 ORDER BY created_at DESC
@@ -3524,6 +3646,7 @@ def list_projects():
             ).fetchall()
         projects = []
         for r in rows:
+            cover_url = ensure_tour_cover_image(r)
             projects.append(
                 {
                     "project_id": r["id"],
@@ -3532,7 +3655,7 @@ def list_projects():
                     "slug": r["slug"],
                     "created_at": r["created_at"],
                     "gallery_url": f"/t/{r['slug']}",
-                    "preview_url": None,
+                    "cover_url": cover_url,
                 }
             )
         return jsonify(projects), 200
