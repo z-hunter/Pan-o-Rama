@@ -33,6 +33,7 @@
         .scene-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
         .badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.4; vertical-align: middle; border: 1px solid rgba(255,255,255,0.12); }
         .badge-warn { background: rgba(255,193,7,0.14); color: #ffdb79; border-color: rgba(255,193,7,0.25); }
+        .badge-ok { background: rgba(40,167,69,0.18); color: #8cffb3; border-color: rgba(40,167,69,0.35); }
         .scene-actions { display: flex; gap: 8px; align-items: center; }
         input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; }
         .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
@@ -190,6 +191,7 @@
             <div id="project-scenes" style="display:none; flex-direction: column; flex: 1; min-height: 0;">
                 <h3>Scenes</h3>
                 <div id="scenesList" style="flex:1; overflow-y:auto; margin-bottom: 15px;"></div>
+                <button class="btn btn-ghost" id="setStartBtn" type="button" style="width:100%; margin-bottom: 10px;" onclick="setCurrentSceneAsStart()">Set as start</button>
                 <hr style="border-color:#444; margin:15px 0;">
                 
                 <!-- Step 2 content: Add Scene -->
@@ -287,6 +289,7 @@
     <script>
         let projectId = null;
         let scenes = [];
+        let tourSettings = { start_scene_id: null, start_pitch: null, start_yaw: null, default_hfov: 70 };
         let activeSceneId = null;
         let viewer = null;
         let currentPlanId = null;
@@ -340,10 +343,21 @@
                 }
                 projectId = data.tour.id;
                 scenes = data.tour.scenes || [];
+                tourSettings = {
+                    start_scene_id: data.tour.start_scene_id || null,
+                    start_pitch: Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : null,
+                    start_yaw: Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : null,
+                    default_hfov: Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : 70
+                };
                 showStep(2);
                 updateScenesUI();
                 document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
-                if (scenes.length > 0) loadScene(scenes[0].id);
+                if (scenes.length > 0) {
+                    const startId = (tourSettings.start_scene_id && scenes.some(s => s.id === tourSettings.start_scene_id))
+                        ? tourSettings.start_scene_id
+                        : scenes[0].id;
+                    loadScene(startId);
+                }
             } finally {
                 setLoading(false);
             }
@@ -481,6 +495,12 @@
             const data = await res.json();
             if (!res.ok || !data.tour) return;
             scenes = data.tour.scenes || [];
+            tourSettings = {
+                start_scene_id: data.tour.start_scene_id || null,
+                start_pitch: Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : null,
+                start_yaw: Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : null,
+                default_hfov: Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : 70
+            };
             ensurePendingJobPollers();
             updateScenesUI();
             document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
@@ -510,10 +530,11 @@
                 const status = (s.processing_status && s.processing_status !== 'ready') ? String(s.processing_status) : '';
                 const pct = (typeof s._job_progress_pct === 'number') ? Math.max(0, Math.min(100, s._job_progress_pct)) : null;
                 const badge = status ? `<span class="badge badge-warn">${status.toUpperCase()}${pct !== null ? (' ' + pct + '%') : ''}</span>` : '';
+                const startBadge = (tourSettings.start_scene_id === s.id) ? `<span class="badge badge-ok">START</span>` : '';
                 const div = document.createElement('div');
                 div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
                 div.innerHTML = `
-                    <span class="scene-title">🏠 ${s.name} ${badge}</span>
+                    <span class="scene-title">🏠 ${s.name} ${startBadge} ${badge}</span>
                     <span class="scene-actions">
                         <button class="btn btn-danger btn-sm" type="button" data-scene-delete="${s.id}">Delete</button>
                     </span>
@@ -537,6 +558,13 @@
                     deleteScene(btn.getAttribute('data-scene-delete'));
                 });
             });
+            const setStartBtn = document.getElementById('setStartBtn');
+            if (setStartBtn) {
+                const active = scenes.find(s => s.id === activeSceneId);
+                setStartBtn.disabled = !active || !!(active.processing_status && active.processing_status !== 'ready');
+                setStartBtn.title = active ? `Set "${active.name}" as start scene` : 'Open a scene first';
+                setStartBtn.textContent = active ? `Set "${active.name}" as start` : 'Set as start';
+            }
         }
 
         function showEmptyWorkspace() {
@@ -573,6 +601,11 @@
                 scenes = scenes.filter(s => s.id !== sceneId);
                 for (const s of scenes) {
                     s.hotspots = (s.hotspots || []).filter(h => h.target_id !== sceneId);
+                }
+                if (tourSettings.start_scene_id === sceneId) {
+                    tourSettings.start_scene_id = null;
+                    tourSettings.start_pitch = null;
+                    tourSettings.start_yaw = null;
                 }
 
                 updateScenesUI();
@@ -687,7 +720,7 @@
 
             const config = {
                 "type": scene.type || "equirectangular",
-                "hfov": 70,
+                "hfov": Math.min(120, Math.max(30, Number(tourSettings.default_hfov || 70))),
                 "haov": haov,
                 "vaov": vaov,
                 "panorama": url,
@@ -713,6 +746,9 @@
             if (entryPitch !== null && entryYaw !== null) {
                 config.pitch = entryPitch;
                 config.yaw = entryYaw;
+            } else if (tourSettings.start_scene_id === id && targetPitch === null && targetYaw === null) {
+                if (tourSettings.start_pitch !== null) config.pitch = tourSettings.start_pitch;
+                if (tourSettings.start_yaw !== null) config.yaw = tourSettings.start_yaw;
             }
 
             if (viewer) {
@@ -733,6 +769,47 @@
 
         function transitionToScene(targetId, pitch, yaw, entryPitch = 0, entryYaw = 0) {
             loadScene(targetId, pitch, yaw, entryPitch, entryYaw);
+        }
+
+        async function setCurrentSceneAsStart() {
+            const sceneId = activeSceneId;
+            if (!projectId) return alert('Create or open a tour first.');
+            if (!sceneId) return;
+            const hasViewerScene = viewer && activeSceneId === sceneId;
+            if (!hasViewerScene) {
+                loadScene(sceneId);
+                alert('Rotate and zoom this scene to desired start view, then click "Set as start" again.');
+                return;
+            }
+            const start_pitch = hasViewerScene ? Number(viewer.getPitch()) : 0;
+            const start_yaw = hasViewerScene ? Number(viewer.getYaw()) : 0;
+            const default_hfov = hasViewerScene ? Number(viewer.getHfov()) : Number(tourSettings.default_hfov || 70);
+            setLoading(true, 'Saving start scene...');
+            try {
+                const res = await apiFetch(`/tours/${projectId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        start_scene_id: sceneId,
+                        start_pitch,
+                        start_yaw,
+                        default_hfov
+                    })
+                });
+                if (!res) return;
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.tour) {
+                    alert(data.error || 'Failed to set start scene');
+                    return;
+                }
+                tourSettings.start_scene_id = data.tour.start_scene_id || sceneId;
+                tourSettings.start_pitch = Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : start_pitch;
+                tourSettings.start_yaw = Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : start_yaw;
+                tourSettings.default_hfov = Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : default_hfov;
+                updateScenesUI();
+            } finally {
+                setLoading(false);
+            }
         }
 
         function refreshIncomingLinksPanel() {

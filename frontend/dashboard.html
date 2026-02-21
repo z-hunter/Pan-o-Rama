@@ -20,6 +20,13 @@
     .meter { height: 8px; background: #e6edf5; border-radius: 999px; overflow: hidden; margin-top: 6px; }
     .meter > div { height: 100%; background: #2b7de9; }
     .upgrade { background: #1e57a8; }
+    .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef3f8; border:1px solid #d9e2ef; margin-left:6px; }
+    .access-box { margin-top:10px; padding:10px; border:1px dashed #ccd7e5; border-radius:8px; background:#fafcff; }
+    .access-row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+    .access-row input { margin-top:0; }
+    .access-list { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+    .access-item { display:flex; align-items:center; justify-content:space-between; gap:8px; background:#fff; border:1px solid #e5ebf4; border-radius:8px; padding:6px 8px; }
+    .mini { padding:6px 8px; font-size:12px; }
   </style>
 </head>
 <body>
@@ -60,6 +67,8 @@
   </div>
 
 <script>
+let currentPlanId = null;
+
 async function api(url, opts = {}) {
   const res = await fetch(url, opts);
   const data = await res.json().catch(() => ({}));
@@ -83,6 +92,14 @@ async function loadMe() {
   planName.textContent = `${plan.name || 'Free'} plan`;
   planUsage.textContent = `Tours: ${tours} / ${maxTours} | Remaining: ${ent.remaining_tours ?? 0}`;
   planBar.style.width = `${ratio}%`;
+  currentPlanId = (plan.id || '').toLowerCase();
+  const privateOpt = document.querySelector('#visibility option[value="private"]');
+  if (privateOpt) {
+    const free = currentPlanId === 'free';
+    privateOpt.disabled = free;
+    privateOpt.textContent = free ? 'Private (paid plan required)' : 'Private (author + allowed users)';
+    if (free && visibility.value === 'private') visibility.value = 'public';
+  }
 }
 
 async function loadTours() {
@@ -93,9 +110,10 @@ async function loadTours() {
   for (const t of list) {
     const el = document.createElement('div');
     el.className = 'tour';
+    const visibilityPill = t.visibility === 'private' ? '<span class="pill">private</span>' : '<span class="pill">public</span>';
     el.innerHTML = `
       <h4 style="margin:0 0 6px">${t.title}</h4>
-      <div class="muted">${t.visibility} | ${t.status}</div>
+      <div class="muted">${visibilityPill} ${t.status}</div>
       <div class="muted">slug: ${t.slug}</div>
       <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
         <button onclick="openStudio('${t.id}')">Open Studio</button>
@@ -103,8 +121,20 @@ async function loadTours() {
         <button onclick="finalize('${t.id}')">Finalize</button>
         <button class="danger" onclick="removeTour('${t.id}')">Delete</button>
       </div>
+      ${t.visibility === 'private' ? `
+      <div class="access-box">
+        <div class="muted">Access list (users who can open this private tour)</div>
+        <div class="access-row">
+          <input id="accessEmail-${t.id}" placeholder="user@email.com" />
+          <button class="mini" onclick="grantAccess('${t.id}')">Add</button>
+        </div>
+        <div id="accessList-${t.id}" class="access-list"></div>
+      </div>` : ''}
     `;
     tours.appendChild(el);
+    if (t.visibility === 'private') {
+      loadAccessList(t.id);
+    }
   }
 }
 
@@ -120,6 +150,10 @@ async function createTour() {
     body: JSON.stringify(payload)
   });
   if (!out) return;
+  if (!out.res.ok && out.data && out.data.code === 'private_requires_paid_plan') {
+    createMsg.innerHTML = `Private tours require paid plan. <a href="/account">Upgrade in Account</a>`;
+    return;
+  }
   if (!out.res.ok && out.data && out.data.code === 'plan_limit_exceeded') {
     createMsg.innerHTML = `Plan limit reached. <a href="/account">Upgrade in Account</a>`;
   } else {
@@ -131,6 +165,60 @@ async function createTour() {
     await loadMe();
     await loadTours();
   }
+}
+
+function renderAccessList(tourId, items) {
+  const box = document.getElementById(`accessList-${tourId}`);
+  if (!box) return;
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    box.innerHTML = `<div class="muted">No additional users added yet.</div>`;
+    return;
+  }
+  box.innerHTML = list.map(x => `
+    <div class="access-item">
+      <div>
+        <strong>${x.display_name || 'User'}</strong>
+        <div class="muted">${x.email}</div>
+      </div>
+      <button class="danger mini" onclick="revokeAccess('${tourId}','${x.user_id}')">Remove</button>
+    </div>
+  `).join('');
+}
+
+async function loadAccessList(tourId) {
+  const out = await api(`/tours/${tourId}/access`);
+  if (!out || !out.res.ok) return;
+  renderAccessList(tourId, out.data.items || []);
+}
+
+async function grantAccess(tourId) {
+  const input = document.getElementById(`accessEmail-${tourId}`);
+  if (!input) return;
+  const email = input.value.trim().toLowerCase();
+  if (!email) return;
+  const out = await api(`/tours/${tourId}/access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  if (!out) return;
+  if (!out.res.ok) {
+    alert(out.data.error || 'Failed to grant access');
+    return;
+  }
+  input.value = '';
+  renderAccessList(tourId, out.data.items || []);
+}
+
+async function revokeAccess(tourId, userId) {
+  const out = await api(`/tours/${tourId}/access/${userId}`, { method: 'DELETE' });
+  if (!out) return;
+  if (!out.res.ok) {
+    alert(out.data.error || 'Failed to revoke access');
+    return;
+  }
+  renderAccessList(tourId, out.data.items || []);
 }
 
 async function finalize(id) {

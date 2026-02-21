@@ -1271,6 +1271,10 @@ def init_db():
                 description TEXT NOT NULL DEFAULT '',
                 slug TEXT NOT NULL UNIQUE,
                 visibility TEXT NOT NULL CHECK(visibility IN ('public','private')),
+                start_scene_id TEXT,
+                start_pitch REAL,
+                start_yaw REAL,
+                default_hfov REAL,
                 status TEXT NOT NULL DEFAULT 'draft',
                 deleted_at TEXT,
                 created_at TEXT NOT NULL,
@@ -1375,6 +1379,14 @@ def init_db():
 	                    meta_json TEXT NOT NULL DEFAULT '{}',
 	                    created_at TEXT NOT NULL
 	                );
+                    CREATE TABLE IF NOT EXISTS tour_access_grants (
+                        id TEXT PRIMARY KEY,
+                        tour_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
                     CREATE TABLE IF NOT EXISTS email_verification_tokens (
                         id TEXT PRIMARY KEY,
                         user_id TEXT NOT NULL,
@@ -1395,6 +1407,9 @@ def init_db():
 	                CREATE INDEX IF NOT EXISTS idx_analytics_type_time ON analytics_events(event_type, created_at);
 	                CREATE INDEX IF NOT EXISTS idx_analytics_visitor_time ON analytics_events(visitor_id, created_at);
 	                CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_dedupe ON analytics_events(dedupe_key);
+                    CREATE INDEX IF NOT EXISTS idx_tour_access_tour ON tour_access_grants(tour_id, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_tour_access_user ON tour_access_grants(user_id, created_at);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_tour_access_unique ON tour_access_grants(tour_id, user_id);
                     CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id, created_at);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_email_verify_token_hash ON email_verification_tokens(token_hash);
             """
@@ -1413,6 +1428,15 @@ def init_db():
             db.execute("ALTER TABLE scenes ADD COLUMN processing_error TEXT")
         if "job_id" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN job_id TEXT")
+        tour_cols = [r[1] for r in db.execute("PRAGMA table_info(tours)").fetchall()]
+        if "start_scene_id" not in tour_cols:
+            db.execute("ALTER TABLE tours ADD COLUMN start_scene_id TEXT")
+        if "start_pitch" not in tour_cols:
+            db.execute("ALTER TABLE tours ADD COLUMN start_pitch REAL")
+        if "start_yaw" not in tour_cols:
+            db.execute("ALTER TABLE tours ADD COLUMN start_yaw REAL")
+        if "default_hfov" not in tour_cols:
+            db.execute("ALTER TABLE tours ADD COLUMN default_hfov REAL")
         user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
         if "email_verified" not in user_cols:
             db.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
@@ -1619,6 +1643,10 @@ def analytics_track(event_type, *, visitor_id=None, user_id=None, tour_id=None, 
 def normalize_visibility(val):
     return "public" if val == "public" else "private"
 
+def user_can_use_private_tours(user_id):
+    ent = get_user_entitlements(user_id)
+    return ent.get("plan_id") in {PLAN_PRO, PLAN_BUSINESS}
+
 def slugify(title):
     base = re.sub(r"[^a-zA-Z0-9]+", "-", (title or "").strip().lower()).strip("-")
     if not base:
@@ -1633,6 +1661,10 @@ def serialize_tour(row):
         "description": row["description"],
         "slug": row["slug"],
         "visibility": row["visibility"],
+        "start_scene_id": row["start_scene_id"] if "start_scene_id" in row.keys() else None,
+        "start_pitch": row["start_pitch"] if "start_pitch" in row.keys() else None,
+        "start_yaw": row["start_yaw"] if "start_yaw" in row.keys() else None,
+        "default_hfov": row["default_hfov"] if "default_hfov" in row.keys() else None,
         "status": row["status"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -1654,6 +1686,19 @@ def serialize_scene(row):
         "processing_error": row["processing_error"],
         "job_id": row["job_id"],
     }
+
+def parse_optional_float(value, field_name, min_value=None, max_value=None):
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except Exception:
+        raise ValueError(f"{field_name} must be a number")
+    if min_value is not None and out < min_value:
+        raise ValueError(f"{field_name} must be >= {min_value}")
+    if max_value is not None and out > max_value:
+        raise ValueError(f"{field_name} must be <= {max_value}")
+    return out
 
 def get_billing_mode():
     mode = (os.getenv("BILLING_MODE") or "hybrid").strip().lower()
@@ -1936,7 +1981,12 @@ def can_view_private_tour(tour_row):
         return False
     if user["id"] == tour_row["owner_id"]:
         return True
-    return current_user_is_business()
+    db = get_db()
+    grant = db.execute(
+        "SELECT 1 FROM tour_access_grants WHERE tour_id = ? AND user_id = ? LIMIT 1",
+        (tour_row["id"], user["id"]),
+    ).fetchone()
+    return grant is not None
 
 def fetch_tour_with_access(tour_id, require_owner=False):
     db = get_db()
@@ -1954,6 +2004,28 @@ def fetch_tour_with_access(tour_id, require_owner=False):
     if row["visibility"] == "private" and not can_view_private_tour(row):
         return None, (jsonify({"error": "Forbidden"}), 403)
     return row, None
+
+def list_tour_access_entries(tour_id):
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT g.user_id, u.email, u.display_name, g.created_at
+        FROM tour_access_grants g
+        JOIN users u ON u.id = g.user_id
+        WHERE g.tour_id = ?
+        ORDER BY g.created_at ASC
+        """,
+        (tour_id,),
+    ).fetchall()
+    return [
+        {
+            "user_id": r["user_id"],
+            "email": r["email"],
+            "display_name": r["display_name"],
+            "granted_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 def create_session_response(user_row):
     db = get_db()
@@ -2377,14 +2449,16 @@ def tours_create():
     title = (data.get("title") or "").strip() or "Untitled Tour"
     description = (data.get("description") or "").strip()
     visibility = normalize_visibility(data.get("visibility") or "public")
+    if visibility == "private" and not user_can_use_private_tours(g.current_user["id"]):
+        return jsonify({"error": "Private tours are available on paid plans", "code": "private_requires_paid_plan"}), 403
     tid = str(uuid.uuid4())
     ts = now_iso()
     slug = slugify(title)
     db = get_db()
     db.execute(
         """
-        INSERT INTO tours (id, owner_id, title, description, slug, visibility, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        INSERT INTO tours (id, owner_id, title, description, slug, visibility, status, created_at, updated_at, start_scene_id, start_pitch, start_yaw, default_hfov)
+        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, NULL, NULL, NULL, 70)
         """,
         (tid, g.current_user["id"], title, description, slug, visibility, ts, ts),
     )
@@ -2411,6 +2485,8 @@ def tours_get(tour_id):
     scenes = load_tour_scenes_and_hotspots(tour["id"])
     payload = serialize_tour(tour)
     payload["scenes"] = scenes
+    if g.current_user is not None and g.current_user["id"] == tour["owner_id"]:
+        payload["access_list"] = list_tour_access_entries(tour["id"])
     return jsonify({"tour": payload}), 200
 
 @app.route("/tours/<tour_id>", methods=["PATCH"])
@@ -2423,14 +2499,95 @@ def tours_patch(tour_id):
     title = (data.get("title") or tour["title"]).strip() or tour["title"]
     description = (data.get("description") or tour["description"]).strip()
     visibility = normalize_visibility(data.get("visibility") or tour["visibility"])
+    if visibility == "private" and not user_can_use_private_tours(g.current_user["id"]):
+        return jsonify({"error": "Private tours are available on paid plans", "code": "private_requires_paid_plan"}), 403
+    start_scene_id = data.get("start_scene_id", tour["start_scene_id"] if "start_scene_id" in tour.keys() else None)
+    start_pitch = data.get("start_pitch", tour["start_pitch"] if "start_pitch" in tour.keys() else None)
+    start_yaw = data.get("start_yaw", tour["start_yaw"] if "start_yaw" in tour.keys() else None)
+    default_hfov = data.get("default_hfov", tour["default_hfov"] if "default_hfov" in tour.keys() else None)
+    if start_scene_id == "":
+        start_scene_id = None
+    try:
+        start_pitch = parse_optional_float(start_pitch, "start_pitch", -90, 90)
+        start_yaw = parse_optional_float(start_yaw, "start_yaw", -360, 360)
+        default_hfov = parse_optional_float(default_hfov, "default_hfov", 30, 120)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     db = get_db()
+    if start_scene_id is not None:
+        sc = db.execute(
+            "SELECT id FROM scenes WHERE id = ? AND tour_id = ?",
+            (start_scene_id, tour["id"]),
+        ).fetchone()
+        if sc is None:
+            return jsonify({"error": "start_scene_id must belong to this tour"}), 400
     db.execute(
-        "UPDATE tours SET title = ?, description = ?, visibility = ?, updated_at = ? WHERE id = ?",
-        (title, description, visibility, now_iso(), tour["id"]),
+        """
+        UPDATE tours
+        SET title = ?, description = ?, visibility = ?, start_scene_id = ?, start_pitch = ?, start_yaw = ?, default_hfov = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (title, description, visibility, start_scene_id, start_pitch, start_yaw, default_hfov, now_iso(), tour["id"]),
     )
     db.commit()
     row = db.execute("SELECT * FROM tours WHERE id = ?", (tour["id"],)).fetchone()
     return jsonify({"tour": serialize_tour(row)}), 200
+
+@app.route("/tours/<tour_id>/access", methods=["GET"])
+@require_auth
+def tours_access_list(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    return jsonify({"items": list_tour_access_entries(tour["id"])}), 200
+
+@app.route("/tours/<tour_id>/access", methods=["POST"])
+@require_auth
+def tours_access_add(tour_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    if (tour["visibility"] or "").strip().lower() != "private":
+        return jsonify({"error": "Access list is only used for private tours"}), 400
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if "@" not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+    db = get_db()
+    user = db.execute(
+        "SELECT id, email, display_name FROM users WHERE lower(email) = ?",
+        (email,),
+    ).fetchone()
+    if user is None:
+        return jsonify({"error": "User with this email is not registered"}), 404
+    if user["id"] == tour["owner_id"]:
+        return jsonify({"error": "Owner already has access"}), 400
+    ts = now_iso()
+    db.execute(
+        """
+        INSERT OR IGNORE INTO tour_access_grants (id, tour_id, user_id, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (str(uuid.uuid4()), tour["id"], user["id"], ts),
+    )
+    db.commit()
+    return jsonify({"items": list_tour_access_entries(tour["id"])}), 200
+
+@app.route("/tours/<tour_id>/access/<user_id>", methods=["DELETE"])
+@require_auth
+def tours_access_remove(tour_id, user_id):
+    tour, err = fetch_tour_with_access(tour_id, require_owner=True)
+    if err:
+        return err
+    if user_id == tour["owner_id"]:
+        return jsonify({"error": "Cannot remove owner"}), 400
+    db = get_db()
+    db.execute(
+        "DELETE FROM tour_access_grants WHERE tour_id = ? AND user_id = ?",
+        (tour["id"], user_id),
+    )
+    db.commit()
+    return jsonify({"items": list_tour_access_entries(tour["id"])}), 200
 
 @app.route("/tours/<tour_id>", methods=["DELETE"])
 @require_auth
@@ -2623,9 +2780,20 @@ def scenes_delete(scene_id):
         return jsonify({"error": "Scene not found"}), 404
     if row["owner_id"] != g.current_user["id"]:
         return jsonify({"error": "Forbidden"}), 403
+    ts = now_iso()
     db.execute("DELETE FROM hotspots WHERE from_scene_id = ? OR to_scene_id = ?", (scene_id, scene_id))
     db.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
-    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (now_iso(), row["tour_id"]))
+    db.execute(
+        """
+        UPDATE tours
+        SET start_scene_id = CASE WHEN start_scene_id = ? THEN NULL ELSE start_scene_id END,
+            start_pitch = CASE WHEN start_scene_id = ? THEN NULL ELSE start_pitch END,
+            start_yaw = CASE WHEN start_scene_id = ? THEN NULL ELSE start_yaw END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (scene_id, scene_id, scene_id, ts, row["tour_id"]),
+    )
     db.commit()
     return jsonify({"message": "Scene deleted"}), 200
 
@@ -2750,7 +2918,7 @@ def tours_finalize(tour_id):
     if not ready_scenes:
         return jsonify({"error": "Tour must have at least one READY scene with panorama"}), 400
     ent = get_user_entitlements(g.current_user["id"])
-    gallery_url = generate_tour(tour["id"], scenes, watermark_enabled=ent["watermark_enabled"])
+    gallery_url = generate_tour(tour["id"], scenes, watermark_enabled=ent["watermark_enabled"], tour_settings=tour)
     db.execute("UPDATE tours SET status = 'published', updated_at = ? WHERE id = ?", (now_iso(), tour["id"]))
     db.commit()
     share_url = f"/t/{tour['slug']}"
@@ -2872,6 +3040,7 @@ def tours_export_self_hosted(tour_id):
                 scenes,
                 watermark_enabled=bool(ent.get("watermark_enabled")),
                 force_previews=False,
+                tour_settings=tour,
             )
 
         gallery_dir = os.path.join(app.config["PROCESSED_FOLDER"], tour["id"])
@@ -3464,10 +3633,35 @@ def add_scene(project_id):
         return jsonify({'scene': s_data}), 200
     except Exception as e: app.logger.error(f"Error: {e}", exc_info=True); return jsonify({'error': str(e)}), 500
 
-def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=False):
+def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=False, tour_settings=None):
     # Pannellum's built-in `preview` works best when the scene switch is immediate; otherwise it can
     # look like the previous scene is "frozen" until full-res is ready.
-    tour_config = {"default": {"firstScene": scenes[0]['id'], "sceneFadeDuration": 0, "autoLoad": False, "autoRotate": -2, "hfov": 70}, "scenes": {}}
+    start_scene_id = None
+    start_pitch = None
+    start_yaw = None
+    default_hfov = 70.0
+    if tour_settings is not None:
+        def _get_setting(name, default=None):
+            try:
+                if hasattr(tour_settings, "keys") and name in tour_settings.keys():
+                    return tour_settings[name]
+            except Exception:
+                pass
+            try:
+                return tour_settings.get(name, default)
+            except Exception:
+                return default
+        start_scene_id = _get_setting("start_scene_id")
+        start_pitch = _get_setting("start_pitch")
+        start_yaw = _get_setting("start_yaw")
+        try:
+            default_hfov = float(_get_setting("default_hfov") or 70.0)
+        except Exception:
+            default_hfov = 70.0
+    default_hfov = min(120.0, max(30.0, default_hfov))
+    scene_ids = {s.get("id") for s in scenes if s.get("id")}
+    first_scene = start_scene_id if start_scene_id in scene_ids else scenes[0]["id"]
+    tour_config = {"default": {"firstScene": first_scene, "sceneFadeDuration": 0, "autoLoad": False, "autoRotate": -2, "hfov": default_hfov}, "scenes": {}}
     for scene in scenes:
         pano_name = scene.get('panorama') or ((scene.get('images') or [None])[0])
         if not pano_name:
@@ -3525,6 +3719,17 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
             "minHfov": 30,
             "maxHfov": 120
         }
+        if scene["id"] == first_scene:
+            if start_pitch is not None:
+                try:
+                    cfg["pitch"] = float(start_pitch)
+                except Exception:
+                    pass
+            if start_yaw is not None:
+                try:
+                    cfg["yaw"] = float(start_yaw)
+                except Exception:
+                    pass
         if hires_url:
             cfg["hires"] = hires_url
         if preview_url:
@@ -4420,7 +4625,7 @@ def serve_gallery_files(project_id, filename):
                             watermark_enabled = False
                     # Note: some older galleries may exist on disk without a DB row in `tours`.
                     # We still regenerate `index.html` so players get current UX; access control is enforced above.
-                    generate_tour(project_id, scenes, watermark_enabled=watermark_enabled, force_previews=bool(force_regen))
+                    generate_tour(project_id, scenes, watermark_enabled=watermark_enabled, force_previews=bool(force_regen), tour_settings=tour)
         except Exception as e:
             # Include traceback; this path is user-facing (gallery open) and must be debuggable.
             app.logger.warning("On-demand gallery regen failed: %s", e, exc_info=True)
