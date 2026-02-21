@@ -27,6 +27,7 @@
     .access-list { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
     .access-item { display:flex; align-items:center; justify-content:space-between; gap:8px; background:#fff; border:1px solid #e5ebf4; border-radius:8px; padding:6px 8px; }
     .mini { padding:6px 8px; font-size:12px; }
+    .save-state { min-width: 78px; font-size: 12px; color: #5f6f86; }
   </style>
 </head>
 <body>
@@ -111,10 +112,19 @@ async function loadTours() {
     const el = document.createElement('div');
     el.className = 'tour';
     const visibilityPill = t.visibility === 'private' ? '<span class="pill">private</span>' : '<span class="pill">public</span>';
+    const isFree = currentPlanId === 'free';
+    const privateDisabled = isFree && t.visibility !== 'private';
     el.innerHTML = `
       <h4 style="margin:0 0 6px">${t.title}</h4>
       <div class="muted">${visibilityPill} ${t.status}</div>
       <div class="muted">slug: ${t.slug}</div>
+        <div class="access-row" style="margin-top:8px;">
+          <select id="tourVisibility-${t.id}" onchange="saveTourVisibility('${t.id}')">
+            <option value="public" ${t.visibility === 'public' ? 'selected' : ''}>Public</option>
+            <option value="private" ${t.visibility === 'private' ? 'selected' : ''} ${privateDisabled ? 'disabled' : ''}>Private</option>
+          </select>
+          <span class="save-state" id="tourVisibilityState-${t.id}"></span>
+        </div>
       <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
         <button onclick="openStudio('${t.id}')">Open Studio</button>
         <button onclick="openShare('${t.slug}')">Open share</button>
@@ -136,6 +146,40 @@ async function loadTours() {
       loadAccessList(t.id);
     }
   }
+}
+
+async function saveTourVisibility(tourId) {
+  const sel = document.getElementById(`tourVisibility-${tourId}`);
+  const state = document.getElementById(`tourVisibilityState-${tourId}`);
+  if (!sel) return;
+  if (state) state.textContent = 'Saving...';
+  const visibility = sel.value;
+  const out = await api(`/tours/${tourId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visibility })
+  });
+  if (!out) return;
+  if (!out.res.ok) {
+    if (state) state.textContent = 'Error';
+    if (out.data && out.data.code === 'private_requires_paid_plan') {
+      alert('Private tours require paid plan. Please upgrade.');
+    } else {
+      alert(out.data.error || 'Failed to update visibility');
+    }
+    await loadMe();
+    await loadTours();
+    return;
+  }
+  if (state) {
+    state.textContent = 'Saved';
+    setTimeout(() => {
+      const cur = document.getElementById(`tourVisibilityState-${tourId}`);
+      if (cur) cur.textContent = '';
+    }, 1200);
+  }
+  await loadMe();
+  await loadTours();
 }
 
 async function createTour() {
@@ -248,8 +292,11 @@ async function logout() {
   location.href = '/login';
 }
 
-loadMe();
-loadTours();
+async function initPage() {
+  await loadMe();
+  await loadTours();
+}
+initPage();
 </script>
 </body>
 </html>
