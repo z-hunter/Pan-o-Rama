@@ -25,6 +25,7 @@
     <button onclick="login()">Login</button>
     <button class="alt" onclick="register()">Register</button>
     <button class="alt" onclick="resendVerification()">Resend verification email</button>
+    <button class="alt" onclick="window.location.href='/reset-password'">Forgot password</button>
     <p class="msg" id="msg"></p>
     <p><a href="/">Back to editor</a></p>
   </div>
@@ -98,6 +99,11 @@ async function auth(url, payload) {
   const p = new URLSearchParams(window.location.search);
   const verified = p.get('verified');
   const reason = p.get('reason');
+  const reset = p.get('reset');
+  if (reset === '1') {
+    msg.textContent = 'Password updated. You can now log in.';
+    return;
+  }
   if (verified === '1') {
     msg.textContent = 'Email confirmed. You can now log in.';
     return;

@@ -2,6 +2,7 @@ import unittest
 import uuid
 import os
 import sqlite3
+from backend.app import hash_token
 
 from backend.app import app, DB_PATH, now_iso
 
@@ -177,6 +178,53 @@ class MvpApiTests(unittest.TestCase):
         self.assertAlmostEqual(float(payload["start_pitch"]), 11.5, places=2)
         self.assertAlmostEqual(float(payload["start_yaw"]), -23.0, places=2)
         self.assertAlmostEqual(float(payload["default_hfov"]), 64.0, places=2)
+
+    def test_password_reset_flow(self):
+        self.register_and_login()
+        self.client.post("/auth/logout")
+
+        req = self.client.post("/auth/password/forgot", json={"email": self.email})
+        self.assertEqual(req.status_code, 200)
+
+        db = sqlite3.connect(DB_PATH)
+        try:
+            db.row_factory = sqlite3.Row
+            user = db.execute("SELECT id FROM users WHERE email = ?", (self.email,)).fetchone()
+            self.assertIsNotNone(user)
+            token_row = db.execute(
+                "SELECT token_hash FROM password_reset_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (user["id"],),
+            ).fetchone()
+            self.assertIsNotNone(token_row)
+        finally:
+            db.close()
+
+        # We cannot reconstruct token from hash, so create one directly and test reset endpoint with that.
+        raw_token = f"unit-test-reset-token-{uuid.uuid4().hex}"
+        db = sqlite3.connect(DB_PATH)
+        try:
+            ts = now_iso()
+            expires = "2999-01-01T00:00:00Z"
+            db.execute(
+                "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+                (str(uuid.uuid4()), user["id"], hash_token(raw_token), expires, ts),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        val = self.client.get(f"/auth/password/reset/validate?token={raw_token}")
+        self.assertEqual(val.status_code, 200)
+        self.assertTrue(val.get_json().get("valid"))
+
+        new_password = "NewPassword123"
+        reset = self.client.post("/auth/password/reset", json={"token": raw_token, "new_password": new_password})
+        self.assertEqual(reset.status_code, 200)
+
+        old_login = self.client.post("/auth/login", json={"email": self.email, "password": self.password})
+        self.assertEqual(old_login.status_code, 401)
+        new_login = self.client.post("/auth/login", json={"email": self.email, "password": new_password})
+        self.assertEqual(new_login.status_code, 200)
 
     def test_finalize_includes_watermark_for_free(self):
         self.register_and_login()

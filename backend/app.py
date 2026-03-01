@@ -71,6 +71,7 @@ GALLERY_TEMPLATE_VERSION = 35
 VISITOR_COOKIE_NAME = "lo_vid"
 ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
 EMAIL_VERIFICATION_TTL_SEC = 24 * 60 * 60
+PASSWORD_RESET_TTL_SEC = 60 * 60
 
 @app.route("/__debug/version")
 def debug_version():
@@ -1518,6 +1519,15 @@ def init_db():
                         created_at TEXT NOT NULL,
                         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                     );
+                    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        token_hash TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        used_at TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
 	                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
 	                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
 	                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
@@ -1534,6 +1544,8 @@ def init_db():
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_tour_access_unique ON tour_access_grants(tour_id, user_id);
                     CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id, created_at);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_email_verify_token_hash ON email_verification_tokens(token_hash);
+                    CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_tokens(user_id, created_at);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_pwd_reset_token_hash ON password_reset_tokens(token_hash);
             """
         )
         cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
@@ -1603,23 +1615,17 @@ def create_email_verification_token(user_id):
     db.commit()
     return token
 
-def send_verification_email(recipient_email, token):
+def send_resend_email(recipient_email, subject, html):
     api_key = (os.getenv("RESEND_API_KEY") or "").strip()
     mail_from = (os.getenv("MAIL_FROM") or "").strip()
     if not api_key or not mail_from:
-        app.logger.warning("Email verification: RESEND_API_KEY or MAIL_FROM is missing; skipping send")
+        app.logger.warning("Email send skipped: RESEND_API_KEY or MAIL_FROM is missing")
         return False, "mail_not_configured"
-    verify_url = f"{app_base_url()}/auth/verify?token={token}"
     payload = {
         "from": mail_from,
         "to": [recipient_email],
-        "subject": "Confirm your Pan-o-Rama account",
-        "html": (
-            "<p>Welcome to Pan-o-Rama.</p>"
-            "<p>Confirm your email to activate your account:</p>"
-            f"<p><a href=\"{verify_url}\">{verify_url}</a></p>"
-            "<p>This link expires in 24 hours.</p>"
-        ),
+        "subject": subject,
+        "html": html,
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -1649,6 +1655,47 @@ def send_verification_email(recipient_email, token):
     except Exception as e:
         app.logger.warning("Resend send failed: %s", e)
         return False, "resend_send_failed"
+
+def send_verification_email(recipient_email, token):
+    verify_url = f"{app_base_url()}/auth/verify?token={token}"
+    return send_resend_email(
+        recipient_email,
+        "Confirm your Pan-o-Rama account",
+        (
+            "<p>Welcome to Pan-o-Rama.</p>"
+            "<p>Confirm your email to activate your account:</p>"
+            f"<p><a href=\"{verify_url}\">{verify_url}</a></p>"
+            "<p>This link expires in 24 hours.</p>"
+        ),
+    )
+
+def create_password_reset_token(user_id):
+    token = secrets.token_urlsafe(48)
+    token_hash = hash_token(token)
+    ts = now_iso()
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=PASSWORD_RESET_TTL_SEC)).replace(microsecond=0).isoformat() + "Z"
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
+        VALUES (?, ?, ?, ?, NULL, ?)
+        """,
+        (str(uuid.uuid4()), user_id, token_hash, expires, ts),
+    )
+    db.commit()
+    return token
+
+def send_password_reset_email(recipient_email, token):
+    reset_url = f"{app_base_url()}/reset-password?token={token}"
+    return send_resend_email(
+        recipient_email,
+        "Reset your Pan-o-Rama password",
+        (
+            "<p>We received a request to reset your Pan-o-Rama password.</p>"
+            f"<p><a href=\"{reset_url}\">{reset_url}</a></p>"
+            "<p>This link expires in 1 hour. If you didn't request this, ignore this email.</p>"
+        ),
+    )
 
 def queue_verification_email(user_id, email):
     token = create_email_verification_token(user_id)
@@ -2416,6 +2463,77 @@ def auth_verify():
     db.execute("UPDATE email_verification_tokens SET used_at = ? WHERE id = ?", (ts, row["token_id"]))
     db.commit()
     return redirect("/login?verified=1", code=302)
+
+@app.route("/auth/password/forgot", methods=["POST"])
+def auth_password_forgot():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if "@" not in email:
+        return jsonify({"error": "Invalid email"}), 400
+    db = get_db()
+    row = db.execute("SELECT id FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
+    if row is not None:
+        try:
+            token = create_password_reset_token(row["id"])
+            send_password_reset_email(email, token)
+        except Exception as e:
+            app.logger.warning("Password reset email send failed: %s", e)
+    return jsonify({"message": "If the account exists, a reset link has been sent"}), 200
+
+@app.route("/auth/password/reset/validate", methods=["GET"])
+def auth_password_reset_validate():
+    token = (request.args.get("token") or "").strip()
+    if not token:
+        return jsonify({"valid": False, "reason": "missing_token"}), 400
+    token_hash = hash_token(token)
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id, expires_at, used_at
+        FROM password_reset_tokens
+        WHERE token_hash = ?
+        """,
+        (token_hash,),
+    ).fetchone()
+    if row is None:
+        return jsonify({"valid": False, "reason": "invalid_token"}), 200
+    if row["used_at"] is not None:
+        return jsonify({"valid": False, "reason": "already_used"}), 200
+    if row["expires_at"] <= now_iso():
+        return jsonify({"valid": False, "reason": "expired"}), 200
+    return jsonify({"valid": True}), 200
+
+@app.route("/auth/password/reset", methods=["POST"])
+def auth_password_reset():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    new_password = data.get("new_password") or ""
+    if not token:
+        return jsonify({"error": "Missing token"}), 400
+    if len(new_password) < 8:
+        return jsonify({"error": "new_password must be at least 8 characters"}), 400
+    token_hash = hash_token(token)
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id, user_id, expires_at, used_at
+        FROM password_reset_tokens
+        WHERE token_hash = ?
+        """,
+        (token_hash,),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "Invalid token"}), 400
+    if row["used_at"] is not None:
+        return jsonify({"error": "Token already used"}), 400
+    if row["expires_at"] <= now_iso():
+        return jsonify({"error": "Token expired"}), 400
+    ts = now_iso()
+    db.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (generate_password_hash(new_password), ts, row["user_id"]))
+    db.execute("UPDATE password_reset_tokens SET used_at = ? WHERE id = ?", (ts, row["id"]))
+    db.execute("DELETE FROM sessions WHERE user_id = ?", (row["user_id"],))
+    db.commit()
+    return jsonify({"message": "Password updated"}), 200
 
 @app.route("/auth/logout", methods=["POST"])
 def auth_logout():
@@ -3593,6 +3711,10 @@ def index():
 @app.route('/login')
 def login_page():
     return send_from_directory(FRONTEND_FOLDER, 'login.html')
+
+@app.route('/reset-password')
+def reset_password_page():
+    return send_from_directory(FRONTEND_FOLDER, 'reset_password.html')
 
 @app.route('/dashboard')
 def dashboard_page():
