@@ -67,7 +67,7 @@ PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
 COVER_FILENAME = "cover.jpg"
 COVER_META_FILENAME = "cover.meta.json"
-GALLERY_TEMPLATE_VERSION = 35
+GALLERY_TEMPLATE_VERSION = 36
 VISITOR_COOKIE_NAME = "lo_vid"
 ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
 EMAIL_VERIFICATION_TTL_SEC = 24 * 60 * 60
@@ -3990,30 +3990,32 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
 <html lang="en">
 <head>
     <meta charset="UTF-8"><title>Virtual Tour</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="lokalny_obiektyw_gallery_template" content="v{GALLERY_TEMPLATE_VERSION}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
 	    <style>
-	        body {{ margin: 0; padding: 0; background: #000; overflow: hidden; }}
-	        #panorama {{ width: 100vw; height: 100vh; background: #0b0b0b; }}
+	        html {{ height: 100%; }}
+	        body {{ margin: 0; padding: 0; background: #000; overflow: hidden; min-height: 100vh; min-height: 100svh; min-height: 100dvh; overscroll-behavior: none; }}
+	        #panorama {{ width: 100vw; height: 100vh; height: 100svh; height: 100dvh; background: #0b0b0b; }}
 	        .custom-hotspot {{ height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }}
 	        .custom-hotspot::after {{ content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }}
 	        .custom-hotspot:hover {{ background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }}
 	        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {{ display: none !important; }}
 	        .loading-overlay {{ position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; pointer-events: none; }}
 	        /* When a low-res preview is visible, avoid a full-screen dimmer: show a small non-blocking HUD instead. */
-	        .loading-overlay.preview-mode {{ background: transparent; align-items: flex-end; justify-content: center; padding: 0 0 18px 0; }}
+	        .loading-overlay.preview-mode {{ background: transparent; align-items: flex-end; justify-content: center; padding: 0 0 calc(18px + env(safe-area-inset-bottom, 0px)) 0; }}
 	        .loading-overlay.preview-mode .loading-progress {{ width: min(420px, 72vw); margin-top: 8px; }}
 	        .loading-overlay.preview-mode .loading-title {{ font-size: 13px; color: rgba(219,234,255,0.95); text-shadow: 0 2px 12px rgba(0,0,0,0.6); }}
 	        .loading-overlay.preview-mode .loading-progress .bar {{ height: 8px; background: rgba(0,0,0,0.25); }}
 	        .loading-overlay.preview-mode .loading-progress .pct {{ display: none; }}
         .loading-title {{ font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; }}
-        .loading-progress {{ width: min(520px, 78vw); margin-top: 12px; }}
+        .loading-progress {{ width: min(520px, calc(100vw - 32px)); margin-top: 12px; }}
         .loading-progress .bar {{ height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }}
         .loading-progress .fill {{ height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }}
         .loading-progress .pct {{ margin-top: 8px; font: 600 13px/1.2 'Segoe UI', sans-serif; color: #bcd7ff; text-align: center; }}
-	        .scene-nav {{ position: fixed; top: 14px; right: 14px; z-index: 9999; pointer-events: auto; }}
-	        .quality-nav {{ position: fixed; left: 14px; bottom: 14px; z-index: 9999; pointer-events: auto; }}
+	        .scene-nav {{ position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: calc(14px + env(safe-area-inset-right, 0px)); z-index: 9999; pointer-events: auto; }}
+	        .quality-nav {{ position: fixed; left: calc(14px + env(safe-area-inset-left, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 9999; pointer-events: auto; }}
         .scene-nav-btn {{ width: 56px; height: 44px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.55); color: #e6f1ff; font: 800 14px/1 'Segoe UI', sans-serif; cursor: pointer; letter-spacing: 0.4px; }}
         .scene-nav-btn.compact {{ width: 44px; }}
         .scene-nav-btn:hover {{ background: rgba(0,0,0,0.7); border-color: rgba(77,163,255,0.55); }}
@@ -4024,7 +4026,30 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
         .scene-nav-item {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px; border-radius: 10px; cursor: pointer; color: #d8e8ff; font: 600 14px/1.2 'Segoe UI', sans-serif; }}
         .scene-nav-item:hover {{ background: rgba(77,163,255,0.16); }}
         .scene-nav-item .pill {{ font: 700 11px/1 'Segoe UI', sans-serif; color: #9fc7ff; border: 1px solid rgba(77,163,255,0.35); background: rgba(0,0,0,0.35); padding: 4px 8px; border-radius: 999px; }}
-        .wm-badge {{ position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }}
+        .wm-badge {{ position: fixed; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); right: calc(14px + env(safe-area-inset-right, 0px)); background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }}
+        @media (max-width: 720px) {{
+            .custom-hotspot {{ height: 38px; width: 38px; border-width: 2px; }}
+            .custom-hotspot::after {{ width: 11px; height: 11px; border-top-width: 4px; border-right-width: 4px; }}
+            .scene-nav-btn {{ width: 48px; height: 40px; border-radius: 10px; }}
+            .scene-nav-btn.compact {{ width: 40px; }}
+            .scene-nav-btn svg {{ width: 18px; height: 18px; }}
+            .scene-nav-menu {{ top: 48px; width: min(300px, calc(100vw - 24px)); max-height: min(52vh, 360px); }}
+            .scene-nav-item {{ padding: 10px 9px; font-size: 13px; }}
+            .loading-title {{ font-size: 14px; }}
+            .loading-progress .pct {{ font-size: 12px; }}
+            .wm-badge {{ font-size: 11px; padding: 6px 10px; }}
+        }}
+        @media (orientation: landscape) and (max-height: 520px) {{
+            .scene-nav {{ top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); }}
+            .quality-nav {{ left: calc(10px + env(safe-area-inset-left, 0px)); bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }}
+            .scene-nav-menu {{ max-height: 58vh; }}
+            .wm-badge {{ bottom: calc(10px + env(safe-area-inset-bottom, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); }}
+        }}
+        @supports (-webkit-touch-callout: none) {{
+            html {{ height: -webkit-fill-available; }}
+            body {{ min-height: -webkit-fill-available; }}
+            #panorama {{ height: -webkit-fill-available; }}
+        }}
     </style>
 </head>
 	<body>
