@@ -26,6 +26,10 @@
         .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100%; min-height: 0; overflow-y: auto; box-sizing: border-box; }
         .viewer-container { flex: 1; position: relative; background: #000; height: 100%; }
         #pano-editor { width: 100%; height: 100%; }
+        .mobile-studio-nav { display: none; }
+        .mobile-studio-nav .nav-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+        .mobile-studio-nav .btn { padding: 9px 8px; font-size: 0.84rem; }
+        .mobile-studio-nav .btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
         .step { display: none; }
         .step.active { display: flex; flex-direction: column; overflow: hidden; }
         #step2.step.active, #step3.step.active {
@@ -138,6 +142,28 @@
                 overflow-y: auto;
                 flex-shrink: 0;
             }
+            #project-scenes {
+                flex: 0 0 auto !important;
+                display: block;
+            }
+            #scenesList {
+                flex: 0 0 auto !important;
+                max-height: 24vh;
+                min-height: 96px !important;
+                margin-bottom: 10px !important;
+            }
+            #step2.step.active, #step3.step.active {
+                display: block;
+                overflow: visible;
+            }
+            .mobile-studio-nav {
+                display: block;
+                position: sticky;
+                top: 0;
+                z-index: 3;
+                background: #222;
+                padding-bottom: 8px;
+            }
             #step1 h3 { margin: 0 0 4px; font-size: 1rem; }
             #step1 p { margin: 0 0 8px; font-size: 0.88rem; line-height: 1.25; }
             #step1 .btn { padding: 9px 10px; font-size: 0.9rem; }
@@ -170,6 +196,7 @@
                 font-size: 0.8rem;
             }
             .sidebar { max-height: min(38vh, 300px); padding: 7px 8px; }
+            #scenesList { max-height: 22vh; }
             #step1 h3 { font-size: 0.95rem; margin-bottom: 3px; }
             #step1 p { font-size: 0.82rem; margin-bottom: 6px; }
             #step1 .btn { padding: 8px 8px; font-size: 0.84rem; }
@@ -179,6 +206,7 @@
             .sidebar h3, .sidebar h4 { margin: 0 0 8px; }
             .scene-item { padding: 8px; font-size: 0.9rem; }
             .hud { left: 10px; right: auto; max-width: calc(100vw - 20px); }
+            .mobile-studio-nav .btn { padding: 8px 6px; font-size: 0.78rem; }
         }
         @media (max-height: 760px) {
             .logo-giant { max-height: min(32vh, 240px); }
@@ -207,6 +235,13 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div id="project-scenes" style="display:none; flex-direction: column; flex: 1; min-height: 0;">
+                <div class="mobile-studio-nav">
+                    <div class="nav-row">
+                        <button class="btn btn-ghost" id="mobileScenesBtn" type="button" onclick="focusScenesList()">Scenes</button>
+                        <button class="btn btn-ghost" id="mobileAddBtn" type="button" onclick="showStep(2)">Add</button>
+                        <button class="btn btn-ghost" id="mobileLinkBtn" type="button" onclick="startLinking()">Link</button>
+                    </div>
+                </div>
                 <h3>Scenes</h3>
                 <div id="scenesList" style="flex:1; min-height:140px; overflow-y:auto; margin-bottom: 15px;"></div>
                 <hr style="border-color:#444; margin:15px 0;">
@@ -561,6 +596,7 @@
                 list.appendChild(div);
             });
             const linkBtn = document.getElementById('gotoStep3');
+            const mobileLinkBtn = document.getElementById('mobileLinkBtn');
             if (linkBtn) {
                 const readyCount = getReadyScenes().length;
                 const pendingCount = getPendingScenes().length;
@@ -568,6 +604,10 @@
                 linkBtn.title = readyCount === 0
                     ? (pendingCount > 0 ? `Scenes are still processing (${pendingCount}). Wait until at least one is ready.` : 'Add at least one scene')
                     : '';
+                if (mobileLinkBtn) {
+                    mobileLinkBtn.disabled = linkBtn.disabled;
+                    mobileLinkBtn.title = linkBtn.title;
+                }
             }
             list.querySelectorAll('button[data-scene-delete]').forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -583,6 +623,7 @@
                 setStartBtn.title = active ? `Set "${active.name}" as start scene` : 'Open a scene first';
                 setStartBtn.textContent = active ? `Set "${active.name}" as start` : 'Set as start';
             }
+            refreshMobileStudioNav();
         }
 
         function showEmptyWorkspace() {
@@ -1102,6 +1143,26 @@
             const projectScenes = document.getElementById('project-scenes');
             projectScenes.style.display = n > 1 ? 'flex' : 'none';
             updateScenesUI();
+            refreshMobileStudioNav(n);
+        }
+
+        function focusScenesList() {
+            const list = document.getElementById('scenesList');
+            refreshMobileStudioNav(0);
+            if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function refreshMobileStudioNav(activeStep) {
+            const scenesBtn = document.getElementById('mobileScenesBtn');
+            const addBtn = document.getElementById('mobileAddBtn');
+            const linkBtn = document.getElementById('mobileLinkBtn');
+            if (!scenesBtn || !addBtn || !linkBtn) return;
+            const step2Active = document.getElementById('step2').classList.contains('active');
+            const step3Active = document.getElementById('step3').classList.contains('active');
+            const mode = activeStep === 0 ? 0 : (activeStep || (step3Active ? 3 : (step2Active ? 2 : 0)));
+            scenesBtn.classList.toggle('active', mode === 0);
+            addBtn.classList.toggle('active', mode === 2);
+            linkBtn.classList.toggle('active', mode === 3);
         }
 
         function setLoading(show, text = "") {
