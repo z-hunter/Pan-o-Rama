@@ -65,6 +65,7 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 PREVIEW_FILENAME = "preview.jpg"
 WEB_PANO_FILENAME = "web.jpg"
+STUDIO_WEB_PANO_FILENAME = "studio_web.jpg"
 COVER_FILENAME = "cover.jpg"
 COVER_META_FILENAME = "cover.meta.json"
 GALLERY_TEMPLATE_VERSION = 36
@@ -941,7 +942,20 @@ def ensure_scene_preview(tour_id, scene_id, source_filename, preview_filename=PR
         app.logger.warning(f"Preview generation failed: {e}")
         return None
 
-def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_PANO_FILENAME, max_size=(8192, 8192), quality=90):
+def looks_like_equirectangular_aspect(aspect_ratio):
+    try:
+        aspect = float(aspect_ratio)
+    except Exception:
+        return False
+    return 1.9 <= aspect <= 2.1
+
+def _target_thumbnail_size(src_w, src_h, max_size):
+    if src_w <= 0 or src_h <= 0:
+        return (0, 0)
+    ratio = min(max_size[0] / float(src_w), max_size[1] / float(src_h), 1.0)
+    return (max(1, int(round(src_w * ratio))), max(1, int(round(src_h * ratio))))
+
+def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_PANO_FILENAME, max_size=(6144, 6144), quality=90):
     """
     Create a "web-safe" panorama size to avoid extremely large textures that can freeze the browser.
     Stored next to scene assets under processed_galleries.
@@ -953,8 +967,6 @@ def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_P
     src_path = os.path.join(proc_dir, source_filename)
     out_path = os.path.join(proc_dir, web_filename)
     try:
-        if os.path.exists(out_path):
-            return web_filename
         if not os.path.exists(src_path):
             return None
         old_max = getattr(Image, "MAX_IMAGE_PIXELS", None)
@@ -966,6 +978,14 @@ def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_P
             im = ImageOps.exif_transpose(im)
             if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
+            target_w, target_h = _target_thumbnail_size(im.width, im.height, max_size)
+            if os.path.exists(out_path):
+                try:
+                    with Image.open(out_path) as existing:
+                        if existing.width == target_w and existing.height == target_h:
+                            return web_filename
+                except Exception:
+                    pass
             # If the source is already reasonably sized, don't create a redundant web copy.
             if im.width <= max_size[0] and im.height <= max_size[1]:
                 return None
@@ -984,6 +1004,16 @@ def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_P
     except Exception as e:
         app.logger.warning(f"Web pano generation failed: {e}")
         return None
+
+def ensure_scene_studio_web_pano(tour_id, scene_id, source_filename):
+    return ensure_scene_web_pano(
+        tour_id,
+        scene_id,
+        source_filename,
+        web_filename=STUDIO_WEB_PANO_FILENAME,
+        max_size=(4096, 4096),
+        quality=88,
+    )
 
 def ensure_tour_cover_image(tour_row):
     """
@@ -1164,10 +1194,18 @@ def process_scene_from_raw_paths(tour_id, scene_id, name, is_pano, raw_paths, or
         with Image.open(img_p) as img:
             aspect = img.width / img.height
             vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
-            if is_pano:
+            auto_single_pano = bool(is_pano) or looks_like_equirectangular_aspect(aspect)
+            if auto_single_pano:
                 pano_file = processed[0]
                 haov = 360
                 vaov = 360 / aspect
+                if not is_pano:
+                    app.logger.info(
+                        "Auto-detected single-file panorama for tour=%s scene=%s aspect=%.3f",
+                        tour_id,
+                        scene_id,
+                        aspect,
+                    )
             else:
                 haov = vaov_c * aspect
                 vaov = vaov_c
@@ -1190,6 +1228,7 @@ def process_scene_from_raw_paths(tour_id, scene_id, name, is_pano, raw_paths, or
     preview_path = ensure_scene_preview(tour_id, scene_id, src_for_preview) if src_for_preview else None
     if src_for_preview:
         ensure_scene_web_pano(tour_id, scene_id, src_for_preview)
+        ensure_scene_studio_web_pano(tour_id, scene_id, src_for_preview)
 
     ts = now_iso()
     db = get_db()
@@ -1840,11 +1879,19 @@ def serialize_tour(row):
     }
 
 def serialize_scene(row):
+    studio_web_pano = None
+    try:
+        pano_name = row["panorama_path"]
+        if pano_name:
+            studio_web_pano = ensure_scene_studio_web_pano(row["tour_id"], row["id"], pano_name)
+    except Exception:
+        studio_web_pano = None
     return {
         "id": row["id"],
         "tour_id": row["tour_id"],
         "name": row["title"],
         "panorama": row["panorama_path"],
+        "web": studio_web_pano,
         "preview": row["preview_path"],
         "images": json.loads(row["images_json"] or "[]"),
         "haov": row["haov"],
@@ -2954,12 +3001,20 @@ def tours_add_scene(tour_id):
         with Image.open(img_p) as img:
             aspect = img.width / img.height
             vaov_c = 2 * math.degrees(math.atan(18.0 / focal_35))
-            if is_pano:
+            auto_single_pano = bool(is_pano) or looks_like_equirectangular_aspect(aspect)
+            if auto_single_pano:
                 # If user uploads a single already-stitched equirectangular 360, do NOT crop overlap.
                 # Overlap trimming is only for wide panoramas that accidentally contain duplicated seam content.
                 pano_file = processed[0]
                 haov = 360
                 vaov = 360 / aspect
+                if not is_pano:
+                    app.logger.info(
+                        "Auto-detected single-file panorama for tour=%s scene=%s aspect=%.3f (sync path)",
+                        tour["id"],
+                        sid,
+                        aspect,
+                    )
             else:
                 haov = vaov_c * aspect
                 vaov = vaov_c
@@ -2982,6 +3037,9 @@ def tours_add_scene(tour_id):
     # Generate preview for faster transitions (use pano when present, else the first processed frame).
     src_for_preview = pano_file or (processed[0] if processed else None)
     preview_path = ensure_scene_preview(tour["id"], sid, src_for_preview) if src_for_preview else None
+    if src_for_preview:
+        ensure_scene_web_pano(tour["id"], sid, src_for_preview)
+        ensure_scene_studio_web_pano(tour["id"], sid, src_for_preview)
     db.execute(
         """
         INSERT INTO scenes (id, tour_id, title, panorama_path, preview_path, images_json, order_index, haov, vaov, scene_type, processing_status, processing_error, job_id, created_at, updated_at)
@@ -3914,7 +3972,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
         # Serve a web-safe pano by default to avoid browser freezes on very large textures.
         # Keep the original hi-res URL available for an optional "HD" user toggle in the player.
         orig_name = scene.get("hires") or pano_name
-        web_name = scene.get("web") or ensure_scene_web_pano(project_id, scene["id"], orig_name)
+        web_name = ensure_scene_web_pano(project_id, scene["id"], orig_name)
         served_name = web_name or orig_name
         panorama_url = f"{scene['id']}/{served_name}"
         hires_url = f"{scene['id']}/{orig_name}" if served_name != orig_name else None

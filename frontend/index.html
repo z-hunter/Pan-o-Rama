@@ -22,10 +22,10 @@
         }
         .app-header { background: #2a2a2a; padding: calc(10px + env(safe-area-inset-top, 0px)) 20px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #444; gap: 12px; }
         .logo-small { height: 40px; }
-        .main-container { display: flex; flex: 1; min-height: 0; overflow: hidden; }
-        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100%; min-height: 0; overflow-y: auto; box-sizing: border-box; }
-        .viewer-container { flex: 1; position: relative; background: #000; height: 100%; }
-        #pano-editor { width: 100%; height: 100%; }
+        .main-container { display: flex; flex: 1; min-height: 0; overflow: hidden; align-items: stretch; }
+        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow-y: auto; box-sizing: border-box; align-self: stretch; }
+        .viewer-container { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; background: #000; align-self: stretch; display: flex; }
+        #pano-editor { width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; }
         .mobile-studio-nav { display: none; }
         .mobile-studio-nav .nav-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
         .mobile-studio-nav .btn { padding: 9px 8px; font-size: 0.84rem; }
@@ -168,7 +168,7 @@
             #step1 p { margin: 0 0 8px; font-size: 0.88rem; line-height: 1.25; }
             #step1 .btn { padding: 9px 10px; font-size: 0.9rem; }
             .viewer-container {
-                flex: 1;
+                flex: 1 1 auto;
                 min-height: 0;
                 height: auto;
                 padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -252,7 +252,7 @@
                     <input type="text" id="sceneName" placeholder="e.g. Lobby">
                     <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
                     <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
-                        <input type="checkbox" id="isPano" style="width:auto;">
+                        <input type="checkbox" id="isPano" style="width:auto;" checked>
                         <label for="isPano">This is a 360° Panorama</label>
                     </div>
                     <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Scene</button>
@@ -351,6 +351,8 @@
         const jobPollers = new Map(); // job_id -> true
         let sceneLoadTimer = null;
         let sceneLoadPct = 0;
+        let addSceneBusy = false;
+        let addSceneCooldownUntil = 0;
 
         function getTourIdFromQuery() {
             const params = new URLSearchParams(window.location.search);
@@ -439,11 +441,17 @@
         }
 
         async function addScene() {
+            const now = Date.now();
+            if (addSceneBusy || now < addSceneCooldownUntil) return;
             const name = document.getElementById('sceneName').value;
             const files = document.getElementById('sceneFiles').files;
             const isPano = document.getElementById('isPano').checked;
             if (!projectId) return alert("Create or open a tour first.");
             if (!name || files.length === 0) return alert("Fill all fields");
+            addSceneBusy = true;
+            addSceneCooldownUntil = now + 1600;
+            const addBtn = document.getElementById('addBtn');
+            if (addBtn) addBtn.disabled = true;
 
             const formData = new FormData();
             formData.append('scene_name', name);
@@ -478,6 +486,7 @@
                     }
                     setLoading(false);
                     pollJobUntilTerminal(data.job_id, { refreshTourOnDone: true });
+                    if (data.scene && data.scene.id) pollSceneReadyFallback(data.scene.id);
                     return;
                 }
 
@@ -488,10 +497,21 @@
             } finally {
                 // In async mode we already hid the loader after upload.
                 if (document.getElementById('loader').style.display !== 'none') setLoading(false);
+                setTimeout(() => {
+                    addSceneBusy = false;
+                    const btn = document.getElementById('addBtn');
+                    if (btn) btn.disabled = false;
+                }, 1200);
             }
         }
 
         function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        function isSceneReady(scene) {
+            if (!scene) return false;
+            const status = String(scene.processing_status || '').toLowerCase();
+            return !status || status === 'ready' || status === 'done';
+        }
 
         async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false, showLoader = false } = {}) {
             if (!jobId || jobPollers.has(jobId)) return;
@@ -510,7 +530,7 @@
                         const s = scenes.find(x => x.id === job.scene_id);
                         if (s) {
                             s.job_id = job.id;
-                            s.processing_status = job.status;
+                            s.processing_status = job.status === 'done' ? 'ready' : job.status;
                             s._job_progress_pct = Number(job.progress_pct || 0);
                         }
                         updateScenesUI();
@@ -559,8 +579,18 @@
             document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
         }
 
+        async function pollSceneReadyFallback(sceneId, attempts = 45) {
+            if (!sceneId || !projectId) return;
+            for (let i = 0; i < attempts; i++) {
+                await sleep(1200);
+                await refreshTour();
+                const scene = scenes.find(s => s.id === sceneId);
+                if (isSceneReady(scene)) return;
+            }
+        }
+
         function getReadyScenes() {
-            return scenes.filter(s => (!s.processing_status || s.processing_status === 'ready') && (s.panorama || (s.images && s.images[0])));
+            return scenes.filter(s => isSceneReady(s) && (s.web || s.panorama));
         }
 
         function getPendingScenes() {
@@ -580,7 +610,7 @@
             if (!list) return;
             list.innerHTML = '';
             scenes.forEach(s => {
-                const status = (s.processing_status && s.processing_status !== 'ready') ? String(s.processing_status) : '';
+                const status = (!isSceneReady(s) && s.processing_status) ? String(s.processing_status) : '';
                 const pct = (typeof s._job_progress_pct === 'number') ? Math.max(0, Math.min(100, s._job_progress_pct)) : null;
                 const badge = status ? `<span class="badge badge-warn">${status.toUpperCase()}${pct !== null ? (' ' + pct + '%') : ''}</span>` : '';
                 const startBadge = (tourSettings.start_scene_id === s.id) ? `<span class="badge badge-ok">START</span>` : '';
@@ -619,7 +649,7 @@
             const setStartBtn = document.getElementById('setStartBtn');
             if (setStartBtn) {
                 const active = scenes.find(s => s.id === activeSceneId);
-                setStartBtn.disabled = !active || !!(active.processing_status && active.processing_status !== 'ready');
+                setStartBtn.disabled = !active || !isSceneReady(active);
                 setStartBtn.title = active ? `Set "${active.name}" as start scene` : 'Open a scene first';
                 setStartBtn.textContent = active ? `Set "${active.name}" as start` : 'Set as start';
             }
@@ -711,23 +741,29 @@
         }
 
         function initSceneViewer(id, config) {
-            viewer = pannellum.viewer('pano-editor', config);
-            activeSceneId = id;
-            updateScenesUI();
             document.getElementById('step1-workspace').style.display = 'none';
             document.getElementById('pano-editor').style.display = 'block';
-            bindLinkingHandler();
-            prefetchLinkedScenes(id);
-            refreshIncomingLinksPanel();
-            try {
-                viewer.on('load', () => endSceneLoading());
-            } catch (_) {}
+            requestAnimationFrame(() => {
+                viewer = pannellum.viewer('pano-editor', config);
+                activeSceneId = id;
+                updateScenesUI();
+                bindLinkingHandler();
+                prefetchLinkedScenes(id);
+                refreshIncomingLinksPanel();
+                try {
+                    viewer.on('load', () => {
+                        try { viewer.resize(); } catch (_) {}
+                        endSceneLoading();
+                    });
+                } catch (_) {}
+                try { viewer.resize(); } catch (_) {}
+            });
         }
 
         function getSceneImageUrl(sceneId) {
             const scene = scenes.find(s => s.id === sceneId);
             if (!scene) return null;
-            const imageRef = scene.panorama || (scene.images && scene.images[0]);
+            const imageRef = scene.web || scene.panorama;
             if (!imageRef) return null;
             return `/galleries/${projectId}/${sceneId}/${imageRef}`;
         }
@@ -762,7 +798,7 @@
         function loadScene(id, targetPitch = null, targetYaw = null, entryPitch = null, entryYaw = null) {
             const scene = scenes.find(s => s.id === id);
             if (!scene) return;
-            if (scene.processing_status && scene.processing_status !== 'ready') {
+            if (!isSceneReady(scene)) {
                 if (scene.job_id) {
                     pollJobUntilTerminal(scene.job_id, { refreshTourOnDone: true, showLoader: true });
                 } else {
@@ -770,8 +806,11 @@
                 }
                 return;
             }
-            const imageRef = scene.panorama || (scene.images && scene.images[0]);
-            if (!imageRef) return;
+            const imageRef = scene.web || scene.panorama;
+            if (!imageRef) {
+                alert('This scene has no panorama output yet. Re-upload it as a 360 panorama.');
+                return;
+            }
             const url = `/galleries/${projectId}/${id}/${imageRef}`;
             const haov = Math.min(360, Math.max(30, Number(scene.haov || 100)));
             const vaov = Math.min(180, Math.max(30, Number(scene.vaov || 60)));
@@ -1206,6 +1245,15 @@
             setLoadingProgress(100);
             setTimeout(() => setLoading(false), 180);
         }
+
+        document.getElementById('sceneFiles')?.addEventListener('change', (event) => {
+            const input = event.target;
+            const panoToggle = document.getElementById('isPano');
+            if (!input || !panoToggle) return;
+            if (input.files && input.files.length === 1) {
+                panoToggle.checked = true;
+            }
+        });
 
         (async function bootstrap() {
             try {
