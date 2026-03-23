@@ -4,8 +4,8 @@
 
 ### 1.1 Virtual Tour Creation
 - As a user, I want to upload multiple 360° panoramas.
-- As a user, I want to link panoramas together by placing and configuring hotspots to enable interactive navigation.
-- As a user, I want my generated tour to be playable directly in the web browser.
+- As a user, I want to link panoramas together by placing directional arrows to enable intuitive "walking" navigation between spaces (similar to Google Maps).
+- As a user, I want my generated tour to be playable directly in the web browser with seamlessly animated pseudo-3D transitions between scenes.
 
 ### 1.2 Monetization & Export
 - As a subscribed user, I want to download my completed tour as a standalone archive (HTML/JS/Images) to self-host it independently.
@@ -24,8 +24,9 @@
 - **Tour Export Generator**: Endpoint that takes project details, zips static HTML template and associated images, and serves the download.
 
 ### 2.2 Frontend / UI
-- **Editing Tool**: Interactive canvas where users can visually place hotspots on equirectangular maps.
-- **Viewer Player**: WebGL-based robust viewer with logic to prevent memory leaks when jumping through dozens of high-res scenes.
+- **Design System**: A modern, highly-polished UI/UX that drops the current "technical prototype" feel in favor of a commercial-grade, engaging, and stylish aesthetic.
+- **Editing Tool**: Interactive canvas where users can visually place directional arrows (rather than basic pin markers) to link panoramas.
+- **Viewer Player**: WebGL-based robust viewer featuring intuitive navigation, custom shader pseudo-3D transitions, and robust memory leak prevention.
 - **Admin Dashboard**: Specialized view showing a tabular list of all global tours with quick-links to the editor for each.
 
 ## 3. Non-Functional Requirements

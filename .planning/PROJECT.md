@@ -27,6 +27,9 @@ A hybrid platform that empowers individual users to create, share, and export 36
 - [ ] **Custom Nadir Logo**: Auto-placement of a specific logo/patch in the bottom area of a panorama.
 - [ ] **God Mode (Admin View)**: Administrative ability to view *all* user files across the platform, bypassing privacy locks.
 - [ ] **Admin Editing**: Administrative ability to edit other users' projects or configurations.
+- [ ] **UI/UX Revamp**: Complete redesign of the interface to be modern, stylish, and user-friendly, replacing the current prototype UI.
+- [ ] **"Walking" Navigation**: Replace basic hotspot markers with intuitive directional arrows (Google Maps style).
+- [ ] **Pseudo-3D Transitions**: Implement seamless, animated pseudo-3D transitions between interconnected scenes.
 
 ### Out of Scope
 - [ ] Alternative non-subscription payment models (like direct one-off DLC purchases) — sticking strictly to subscription plans for predictable MRR.
