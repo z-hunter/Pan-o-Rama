@@ -24,6 +24,28 @@ def safe_float(val, default=0.0):
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
+def slugify(text):
+    text = text.lower()
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[-\s]+', '-', text).strip('-')
+    # Add a short unique suffix to avoid collisions
+    return f"{text}-{secrets.token_hex(3)}"
+
+def normalize_visibility(v):
+    v = (v or "public").strip().lower()
+    return "private" if v == "private" else "public"
+
+def parse_optional_float(val, name, min_v, max_v):
+    if val is None or val == "":
+        return None
+    try:
+        f = float(val)
+        if f < min_v or f > max_v:
+            raise ValueError(f"{name} out of range ({min_v} to {max_v})")
+        return f
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid float for {name}")
+
 def _target_thumbnail_size(src_w, src_h, max_size):
     if src_w <= 0 or src_h <= 0:
         return (0, 0)

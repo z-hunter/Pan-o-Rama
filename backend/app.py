@@ -100,6 +100,15 @@ def create_app():
     from backend.blueprints.users import users as users_blueprint
     app.register_blueprint(users_blueprint)
 
+    from backend.blueprints.tours import tours as tours_blueprint
+    app.register_blueprint(tours_blueprint, url_prefix='/tours')
+
+    from backend.blueprints.scenes import scenes as scenes_blueprint
+    app.register_blueprint(scenes_blueprint)
+
+    from backend.blueprints.analytics import analytics as analytics_blueprint
+    app.register_blueprint(analytics_blueprint, url_prefix='/api/analytics')
+
     # Global Hooks
     @app.before_request
     def attach_current_user():
