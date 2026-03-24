@@ -59,11 +59,29 @@ def tours_add_scene(tour_id):
     db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, tour["id"]))
     db.commit()
     
-    # In Phase 3-02, we will add RQ job enqueueing here.
-    # For now, it stays in 'queued' until a worker picks it up (manual or future trigger).
+    # Enqueue background processing
+    from backend.services.job_service import enqueue_job
+    jid = enqueue_job(
+        kind="scene_process",
+        owner_id=g.current_user["id"],
+        tour_id=tour["id"],
+        scene_id=sid,
+        payload={
+            "tour_id": tour["id"],
+            "scene_id": sid,
+            "name": name,
+            "is_pano": is_pano,
+            "raw_paths": saved_raw,
+            "order_index": order_index
+        }
+    )
+    
+    # Update scene with job_id
+    db.execute("UPDATE scenes SET job_id = ? WHERE id = ?", (jid, sid))
+    db.commit()
     
     row = db.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
-    return jsonify({"scene": serialize_scene(row), "job_id": None}), 202
+    return jsonify({"scene": serialize_scene(row), "job_id": jid}), 202
 
 @scenes.route("/<scene_id>", methods=["PATCH"])
 @require_auth

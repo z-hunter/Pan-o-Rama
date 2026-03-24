@@ -1,0 +1,39 @@
+server {
+    listen 80;
+    server_name 57.128.228.75;
+    client_max_body_size 512M;
+
+    root /home/debian/lokalny_obiektyw/frontend;
+    index index.html;
+
+    location /galleries/ {
+        alias /home/debian/lokalny_obiektyw/data/processed_galleries/;
+    }
+
+    location ~ ^/(auth|me|tours|scenes|hotspots|gallery|t|api|billing)(/|$) {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+    }
+
+    location = /all-projects {
+        proxy_pass http://127.0.0.1:8000/all-projects;
+    }
+
+    location = /login {
+        proxy_pass http://127.0.0.1:8000/login;
+    }
+
+    location = /dashboard {
+        proxy_pass http://127.0.0.1:8000/dashboard;
+    }
+
+    location = /account {
+        proxy_pass http://127.0.0.1:8000/account;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

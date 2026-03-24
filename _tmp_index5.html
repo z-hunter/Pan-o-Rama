@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>Virtual Tour</title>
+    <meta name="lokalny_obiektyw_gallery_template" content="v5">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+        #panorama { width: 100vw; height: 100vh; background: #0b0b0b; }
+        .custom-hotspot { height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }
+        .custom-hotspot::after { content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }
+        .custom-hotspot:hover { background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
+        .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; pointer-events: none; }
+        .loading-title { font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; }
+        .loading-progress { width: min(520px, 78vw); margin-top: 12px; }
+        .loading-progress .bar { height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }
+        .loading-progress .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }
+        .loading-progress .pct { margin-top: 8px; font: 600 13px/1.2 'Segoe UI', sans-serif; color: #bcd7ff; text-align: center; }
+        .scene-nav { position: fixed; top: 14px; right: 14px; z-index: 9999; pointer-events: auto; }
+        .scene-nav-btn { width: 44px; height: 44px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.55); color: #e6f1ff; font: 800 18px/1 'Segoe UI', sans-serif; cursor: pointer; }
+        .scene-nav-btn:hover { background: rgba(0,0,0,0.7); border-color: rgba(77,163,255,0.55); }
+        .scene-nav-menu { position: absolute; top: 52px; right: 0; width: min(320px, 78vw); max-height: 50vh; overflow: auto; display: none; background: rgba(10,10,10,0.9); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
+        .scene-nav-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px; border-radius: 10px; cursor: pointer; color: #d8e8ff; font: 600 14px/1.2 'Segoe UI', sans-serif; }
+        .scene-nav-item:hover { background: rgba(77,163,255,0.16); }
+        .scene-nav-item .pill { font: 700 11px/1 'Segoe UI', sans-serif; color: #9fc7ff; border: 1px solid rgba(77,163,255,0.35); background: rgba(0,0,0,0.35); padding: 4px 8px; border-radius: 999px; }
+        .wm-badge { position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.55); color: #d8e8ff; border: 1px solid rgba(77,163,255,0.5); border-radius: 999px; padding: 7px 11px; font: 600 12px/1.2 'Segoe UI', sans-serif; z-index: 9999; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="panorama"></div>
+    <div class="scene-nav" id="sceneNav">
+        <button class="scene-nav-btn" id="sceneNavBtn" type="button" aria-label="Scenes">S</button>
+        <div class="scene-nav-menu" id="sceneNavMenu"></div>
+    </div>
+    <div class="loading-overlay" id="tourLoader">
+        <div class="loading-title" id="tourLoaderText">Loading scene...</div>
+        <div class="loading-progress">
+            <div class="bar"><div class="fill" id="tourLoaderBar"></div></div>
+            <div class="pct" id="tourLoaderPct">0%</div>
+        </div>
+    </div>
+    
+	    <script>
+	    const prefetchCache = new Set();
+	    const prefetchPromises = new Map(); // sceneId -> Promise
+	    const prefetchQueue = [];
+	    const PREFETCH_CONCURRENCY = 2;
+	    let prefetchInflight = 0;
+	    let loadTimer = null;
+	    let loadPct = 0;
+	    let transitioning = false;
+	    let pendingRestore = null; // { sceneId, hfov }
+	    const sceneState = {}; // sceneId -> { hfov }
+	    let loaderShowTimer = null;
+	    let perfWatchTimer = null;
+	    let perfWatchUrl = null;
+
+	    function prefetchUrl(url) {
+	        // Warm HTTP cache + best-effort decode to reduce perceived load time.
+	        return fetch(url, { cache: 'force-cache' })
+	            .then(r => r.ok ? r.blob() : null)
+	            .then(b => {
+	                if (!b) return;
+	                if (typeof createImageBitmap === 'function') {
+	                    return createImageBitmap(b)
+	                        .then(bm => { try { bm.close(); } catch (_) {} })
+	                        .catch(() => {});
+	                }
+	            })
+	            .catch(() => {});
+	    }
+
+	    function pumpPrefetch() {
+	        while (prefetchInflight < PREFETCH_CONCURRENCY && prefetchQueue.length) {
+	            const sceneId = prefetchQueue.shift();
+	            const scene = tourConfig.scenes[sceneId];
+	            if (!scene || !scene.panorama) continue;
+	            prefetchInflight++;
+	            const p = prefetchUrl(scene.panorama).finally(() => {
+	                prefetchInflight--;
+	                pumpPrefetch();
+	            });
+	            prefetchPromises.set(sceneId, p);
+	        }
+	    }
+
+	    function setLoader(show, text) {
+	        const el = document.getElementById('tourLoader');
+	        const t = document.getElementById('tourLoaderText');
+	        if (t && text) t.textContent = text;
+	        if (!el) return;
+	        el.style.display = show ? 'flex' : 'none';
+	        if (!show) {
+	            if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
+	            loadPct = 0;
+	            setLoaderProgress(0);
+	        }
+	    }
+
+    function setLoaderProgress(pct) {
+        const bar = document.getElementById('tourLoaderBar');
+        const label = document.getElementById('tourLoaderPct');
+        if (!bar || !label) return;
+        const v = Math.max(0, Math.min(100, Math.round(pct)));
+        bar.style.width = `${v}%`;
+        label.textContent = `${v}%`;
+    }
+
+	    function startFakeProgress() {
+	        if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
+	        loadPct = Math.max(loadPct, 6);
+	        setLoaderProgress(loadPct);
+	        loadTimer = setInterval(() => {
+	            loadPct += (loadPct < 70 ? 6 : (loadPct < 90 ? 2 : 1));
+	            if (loadPct >= 92) loadPct = 92;
+	            setLoaderProgress(loadPct);
+	        }, 160);
+	    }
+
+	    function beginSceneLoadingSmart(sceneId, text, opts) {
+	        // Show loader only if load takes "long enough" to be noticeable.
+	        // Never fully suppress: even with previews, full-res may still take long and looks like a hang.
+	        const o = opts || {};
+	        const delayMs = (typeof o.delayMs === 'number') ? o.delayMs : 420;
+	        if (loaderShowTimer) { clearTimeout(loaderShowTimer); loaderShowTimer = null; }
+	        // Reset visuals but don't show yet.
+	        setLoader(false);
+	        loadPct = 0;
+	        setLoaderProgress(0);
+	        // Reset resource-timing watcher.
+	        if (perfWatchTimer) { clearInterval(perfWatchTimer); perfWatchTimer = null; }
+	        perfWatchUrl = null;
+	        try {
+	            const sc = (sceneId && tourConfig && tourConfig.scenes) ? tourConfig.scenes[sceneId] : null;
+	            if (sc && sc.panorama) perfWatchUrl = sc.panorama;
+	        } catch (_) {}
+	        loaderShowTimer = setTimeout(() => {
+	            setLoader(true, text || 'Loading scene...');
+	            startFakeProgress();
+	        }, delayMs);
+
+	        // Use PerformanceResourceTiming when available to detect when the full-res panorama URL finished loading.
+	        // Pannellum's 'load' can fire early (e.g., after preview), which makes the UI look stuck.
+	        if (perfWatchUrl && typeof performance !== 'undefined' && performance.getEntriesByName) {
+	            perfWatchTimer = setInterval(() => {
+	                try {
+	                    const entries = performance.getEntriesByName(perfWatchUrl);
+	                    if (entries && entries.length) {
+	                        const e = entries[entries.length - 1];
+	                        if (e && e.responseEnd && e.responseEnd > 0) {
+	                            endSceneLoading();
+	                        }
+	                    }
+	                } catch (_) {}
+	            }, 120);
+	        }
+	    }
+
+	    function beginSceneLoading(text) {
+	        beginSceneLoadingSmart(null, text);
+	    }
+
+	    function endSceneLoading() {
+	        if (loaderShowTimer) { clearTimeout(loaderShowTimer); loaderShowTimer = null; }
+	        if (perfWatchTimer) { clearInterval(perfWatchTimer); perfWatchTimer = null; }
+	        perfWatchUrl = null;
+	        if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
+	        loadPct = 100;
+	        setLoaderProgress(100);
+	        setTimeout(() => setLoader(false), 120);
+	    }
+
+    function defaultHfov() {
+        return (tourConfig.default && typeof tourConfig.default.hfov === 'number') ? tourConfig.default.hfov : 70;
+    }
+
+    function storeBaseHfov() {
+        if (!window.viewer || transitioning) return;
+        const sid = window.viewer.getScene();
+        if (!sid) return;
+        sceneState[sid] = { hfov: window.viewer.getHfov() };
+    }
+
+	    function prefetchScene(sceneId) {
+	        if (!sceneId || prefetchCache.has(sceneId)) return;
+	        const scene = tourConfig.scenes[sceneId];
+	        if (!scene || !scene.panorama) return;
+	        if (scene.preview) {
+	            const img = new Image();
+	            img.src = scene.preview;
+	        }
+	        if (!prefetchPromises.has(sceneId)) {
+	            prefetchQueue.push(sceneId);
+	            pumpPrefetch();
+	        }
+	        prefetchCache.add(sceneId);
+	    }
+    function prefetchLinkedScenes(sceneId) {
+        const scene = tourConfig.scenes[sceneId];
+        if (!scene || !scene.hotSpots) return;
+        scene.hotSpots.forEach(hs => prefetchScene(hs.clickHandlerArgs.targetSceneId));
+    }
+
+	    function smoothSwitch(e, args) {
+	        const viewer = window.viewer;
+	        const fromScene = viewer.getScene();
+	        const baseFrom = (sceneState[fromScene] && typeof sceneState[fromScene].hfov === 'number') ? sceneState[fromScene].hfov : viewer.getHfov();
+	        const zoomTarget = Math.max(30, baseFrom - 40);
+	        const targetSceneId = args.targetSceneId;
+	        const baseTarget = (sceneState[targetSceneId] && typeof sceneState[targetSceneId].hfov === 'number') ? sceneState[targetSceneId].hfov : defaultHfov();
+	        pendingRestore = { sceneId: targetSceneId, hfov: baseTarget };
+	        transitioning = true;
+	        beginSceneLoadingSmart(targetSceneId, 'Loading scene...');
+	        viewer.setHfov(zoomTarget, 800);
+	        viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
+        // Start scene switch while zoom animation is still running for a smoother transition.
+        setTimeout(() => {
+            viewer.loadScene(targetSceneId, args.entryPitch, args.entryYaw, zoomTarget);
+        }, 260);
+    }
+    const tourConfig = {
+    "default": {
+        "firstScene": "7f2c283f-6f58-4806-9dba-b9ddcff87f58",
+        "sceneFadeDuration": 1000,
+        "autoLoad": true,
+        "autoRotate": -2,
+        "hfov": 70
+    },
+    "scenes": {
+        "7f2c283f-6f58-4806-9dba-b9ddcff87f58": {
+            "title": "1",
+            "type": "equirectangular",
+            "haov": 360.0,
+            "vaov": 180.0,
+            "panorama": "7f2c283f-6f58-4806-9dba-b9ddcff87f58/proc_CAM_20260124172644_0033_D.JPG",
+            "hotSpots": [
+                {
+                    "pitch": -4.149416167160585,
+                    "yaw": -175.09003197836228,
+                    "type": "info",
+                    "text": "Go to 3",
+                    "cssClass": "custom-hotspot",
+                    "clickHandlerFunc": "smoothSwitch",
+                    "clickHandlerArgs": {
+                        "targetSceneId": "d8cba934-6007-4e1a-8501-f55f01b592b1",
+                        "viaPitch": -4.149416167160585,
+                        "viaYaw": -175.09003197836228,
+                        "entryPitch": 0.0,
+                        "entryYaw": 0.0
+                    }
+                },
+                {
+                    "pitch": -8.097256530752245,
+                    "yaw": 90.84211745349188,
+                    "type": "info",
+                    "text": "Go to 2",
+                    "cssClass": "custom-hotspot",
+                    "clickHandlerFunc": "smoothSwitch",
+                    "clickHandlerArgs": {
+                        "targetSceneId": "ea62f5c7-4478-4051-a97b-3d6c232be3bf",
+                        "viaPitch": -8.097256530752245,
+                        "viaYaw": 90.84211745349188,
+                        "entryPitch": 0.0,
+                        "entryYaw": 0.0
+                    }
+                }
+            ],
+            "minHfov": 30,
+            "maxHfov": 120,
+            "preview": "7f2c283f-6f58-4806-9dba-b9ddcff87f58/preview.jpg"
+        },
+        "ea62f5c7-4478-4051-a97b-3d6c232be3bf": {
+            "title": "2",
+            "type": "equirectangular",
+            "haov": 360.0,
+            "vaov": 180.0,
+            "panorama": "ea62f5c7-4478-4051-a97b-3d6c232be3bf/proc_CAM_20260124172758_0035_D.JPG",
+            "hotSpots": [
+                {
+                    "pitch": -4.7237711480410995,
+                    "yaw": 96.04596071803638,
+                    "type": "info",
+                    "text": "Go to 4",
+                    "cssClass": "custom-hotspot",
+                    "clickHandlerFunc": "smoothSwitch",
+                    "clickHandlerArgs": {
+                        "targetSceneId": "96474d64-6523-489f-9c45-620be932dcc7",
+                        "viaPitch": -4.7237711480410995,
+                        "viaYaw": 96.04596071803638,
+                        "entryPitch": -7.681200183276962,
+                        "entryYaw": 100.55839450002804
+                    }
+                }
+            ],
+            "minHfov": 30,
+            "maxHfov": 120,
+            "preview": "ea62f5c7-4478-4051-a97b-3d6c232be3bf/preview.jpg"
+        },
+        "d8cba934-6007-4e1a-8501-f55f01b592b1": {
+            "title": "3",
+            "type": "equirectangular",
+            "haov": 360.0,
+            "vaov": 180.0,
+            "panorama": "d8cba934-6007-4e1a-8501-f55f01b592b1/proc_CAM_20260124172601_0032_D.JPG",
+            "hotSpots": [],
+            "minHfov": 30,
+            "maxHfov": 120,
+            "preview": "d8cba934-6007-4e1a-8501-f55f01b592b1/preview.jpg"
+        },
+        "96474d64-6523-489f-9c45-620be932dcc7": {
+            "title": "4",
+            "type": "equirectangular",
+            "haov": 360.0,
+            "vaov": 180.0,
+            "panorama": "96474d64-6523-489f-9c45-620be932dcc7/proc_CAM_20260124172722_0034_D.JPG",
+            "hotSpots": [
+                {
+                    "pitch": -7.861180725307939,
+                    "yaw": -92.03893815001919,
+                    "type": "info",
+                    "text": "Go to 3",
+                    "cssClass": "custom-hotspot",
+                    "clickHandlerFunc": "smoothSwitch",
+                    "clickHandlerArgs": {
+                        "targetSceneId": "d8cba934-6007-4e1a-8501-f55f01b592b1",
+                        "viaPitch": -7.861180725307939,
+                        "viaYaw": -92.03893815001919,
+                        "entryPitch": 0.0,
+                        "entryYaw": 0.0
+                    }
+                },
+                {
+                    "pitch": -7.943934707215496,
+                    "yaw": 111.01965691902089,
+                    "type": "info",
+                    "text": "Go to 2",
+                    "cssClass": "custom-hotspot",
+                    "clickHandlerFunc": "smoothSwitch",
+                    "clickHandlerArgs": {
+                        "targetSceneId": "ea62f5c7-4478-4051-a97b-3d6c232be3bf",
+                        "viaPitch": -7.943934707215496,
+                        "viaYaw": 111.01965691902089,
+                        "entryPitch": 0.0,
+                        "entryYaw": 0.0
+                    }
+                }
+            ],
+            "minHfov": 30,
+            "maxHfov": 120,
+            "preview": "96474d64-6523-489f-9c45-620be932dcc7/preview.jpg"
+        }
+    }
+};
+    Object.values(tourConfig.scenes).forEach(scene => {
+        if (scene.hotSpots) {
+            scene.hotSpots.forEach(hs => {
+                if (hs.clickHandlerFunc === "smoothSwitch") hs.clickHandlerFunc = smoothSwitch;
+            });
+        }
+	    });
+	    // Avoid Pannellum's "flat preview" feeling on the very first load: use full-res directly for first scene.
+	    try {
+	        const fs = tourConfig.default && tourConfig.default.firstScene;
+	        if (fs && tourConfig.scenes && tourConfig.scenes[fs]) delete tourConfig.scenes[fs].preview;
+	    } catch (_) {}
+
+	    beginSceneLoadingSmart(tourConfig.default.firstScene, 'Loading scene...', { delayMs: 0 });
+	    window.viewer = pannellum.viewer('panorama', tourConfig);
+	    prefetchLinkedScenes(tourConfig.default.firstScene);
+	    window.viewer.on('scenechange', (sceneId) => {
+	        prefetchLinkedScenes(sceneId);
+	        // If user navigates via built-in APIs, ensure loader appears.
+	        beginSceneLoadingSmart(sceneId, 'Loading scene...', { delayMs: 420 });
+	    });
+	    window.viewer.on('load', () => {
+	        try {
+            const sid = window.viewer.getScene();
+            let target = defaultHfov();
+            if (pendingRestore && pendingRestore.sceneId === sid) {
+                target = pendingRestore.hfov;
+                pendingRestore = null;
+            } else if (sceneState[sid] && typeof sceneState[sid].hfov === 'number') {
+                target = sceneState[sid].hfov;
+            }
+            sceneState[sid] = { hfov: target };
+            window.viewer.setHfov(target, 0);
+	        } catch (_) {}
+	        transitioning = false;
+	        // Keep endSceneLoading primarily driven by resource timing watcher; but ensure we never get stuck.
+	        setTimeout(() => endSceneLoading(), 800);
+	    });
+
+    // Track user zoom so we don't "lock" them to one hfov.
+    const panoEl = document.getElementById('panorama');
+    if (panoEl) {
+        panoEl.addEventListener('mouseup', () => setTimeout(storeBaseHfov, 0));
+        panoEl.addEventListener('touchend', () => setTimeout(storeBaseHfov, 0));
+        let wheelT = null;
+        panoEl.addEventListener('wheel', () => {
+            if (wheelT) clearTimeout(wheelT);
+            wheelT = setTimeout(storeBaseHfov, 120);
+        }, { passive: true });
+    }
+
+    // Scene dropdown navigation
+    const navBtn = document.getElementById('sceneNavBtn');
+    const navMenu = document.getElementById('sceneNavMenu');
+	    function renderSceneMenu() {
+        if (!navMenu) return;
+        navMenu.innerHTML = '';
+        const ids = Object.keys(tourConfig.scenes || {});
+        ids.forEach((sid, idx) => {
+            const sc = tourConfig.scenes[sid] || {};
+            const item = document.createElement('div');
+            item.className = 'scene-nav-item';
+            item.innerHTML = `<span>${(sc.title || sid)}</span><span class="pill">#${idx + 1}</span>`;
+	            item.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                navMenu.style.display = 'none';
+                if (!window.viewer) return;
+	                if (window.viewer.getScene && window.viewer.getScene() === sid) return;
+	                beginSceneLoadingSmart(sid, 'Loading scene...', { delayMs: 420 });
+	                transitioning = true;
+	                window.viewer.loadScene(sid);
+	            });
+            navMenu.appendChild(item);
+        });
+    }
+    function toggleMenu(show) {
+        if (!navMenu) return;
+        const want = (show === undefined) ? (navMenu.style.display !== 'block') : !!show;
+        if (want) {
+            renderSceneMenu();
+            navMenu.style.display = 'block';
+        } else {
+            navMenu.style.display = 'none';
+        }
+    }
+    if (navBtn && navMenu) {
+        navBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleMenu();
+        });
+        document.addEventListener('click', () => toggleMenu(false));
+        document.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Escape') toggleMenu(false);
+        });
+    }
+    </script>
+</body>
+</html>
