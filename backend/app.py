@@ -26,6 +26,38 @@ import zipfile
 import urllib.request
 import urllib.error
 
+# Import modular core components
+from backend.core.config import (
+    UPLOAD_FOLDER, PROCESSED_FOLDER, DATA_DIR, DB_PATH, ALLOWED_EXTENSIONS,
+    PREVIEW_FILENAME, WEB_PANO_FILENAME, STUDIO_WEB_PANO_FILENAME,
+    COVER_FILENAME, COVER_META_FILENAME, GALLERY_TEMPLATE_VERSION,
+    VISITOR_COOKIE_NAME, ADMIN_ANALYTICS_COOKIE_NAME,
+    EMAIL_VERIFICATION_TTL_SEC, PASSWORD_RESET_TTL_SEC,
+    PLAN_FREE, PLAN_PRO, PLAN_BUSINESS, PLAN_ORDER, DEFAULT_PLAN_DEFS,
+    MAX_CONTENT_LENGTH, BASE_DIR, FRONTEND_FOLDER, IMG_FOLDER
+)
+from backend.core.database import get_db, close_db, init_db
+from backend.core.models import (
+    now_iso, safe_float, natural_sort_key, serialize_tour, serialize_scene,
+    serialize_job, ensure_scene_studio_web_pano, ensure_scene_web_pano,
+    _target_thumbnail_size
+)
+from backend.core.auth import (
+    hash_token, get_current_user, require_auth, create_session_response,
+    require_admin_analytics, has_admin_analytics_access,
+    admin_analytics_cookie_token, get_admin_analytics_password
+)
+from backend.services.email_service import (
+    app_base_url, email_verification_enabled, create_email_verification_token,
+    send_verification_email, create_password_reset_token, send_password_reset_email,
+    queue_verification_email, send_resend_email
+)
+from backend.services.billing_service import (
+    get_user_entitlements, get_user_plan, compute_usage,
+    ensure_user_subscription, set_user_plan, get_active_subscription,
+    get_plan_row, current_user_is_business
+)
+
 try:
     import redis  # type: ignore
 except Exception:
@@ -39,82 +71,64 @@ try:
 except Exception:
     stripe = None
 
-app = Flask(__name__)
-CORS(app)
+def create_app():
+    app = Flask(__name__)
+    CORS(app)
+    
+    app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+    app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
+    app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, '..', 'data')
-UPLOAD_FOLDER = os.path.join(DATA_DIR, 'raw_uploads')
-PROCESSED_FOLDER = os.path.join(DATA_DIR, 'processed_galleries')
-FRONTEND_FOLDER = os.path.join(BASE_DIR, '..', 'frontend')
-IMG_FOLDER = os.path.join(BASE_DIR, '..', 'img')
-DB_PATH = os.path.join(DATA_DIR, 'app.db')
+    # Setup Logging
+    log_file = os.path.join(BASE_DIR, '..', 'flask_app.log')
+    handler = logging.FileHandler(log_file)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.DEBUG)
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024 
+    # DB Teardown
+    app.teardown_appcontext(close_db)
 
-# Setup Logging
-log_file = os.path.join(BASE_DIR, 'flask_app.log')
-handler = logging.FileHandler(log_file)
-handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-app.logger.addHandler(handler)
-app.logger.setLevel(logging.DEBUG)
+    # Initialize DB
+    with app.app_context():
+        init_db()
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+    # Register Blueprints
+    from backend.blueprints.auth import auth as auth_blueprint
+    app.register_blueprint(auth_blueprint, url_prefix='/auth')
 
-PREVIEW_FILENAME = "preview.jpg"
-WEB_PANO_FILENAME = "web.jpg"
-STUDIO_WEB_PANO_FILENAME = "studio_web.jpg"
-COVER_FILENAME = "cover.jpg"
-COVER_META_FILENAME = "cover.meta.json"
-GALLERY_TEMPLATE_VERSION = 36
-VISITOR_COOKIE_NAME = "lo_vid"
-ADMIN_ANALYTICS_COOKIE_NAME = "lo_admin_analytics"
-EMAIL_VERIFICATION_TTL_SEC = 24 * 60 * 60
-PASSWORD_RESET_TTL_SEC = 60 * 60
+    from backend.blueprints.users import users as users_blueprint
+    app.register_blueprint(users_blueprint)
 
-@app.route("/__debug/version")
-def debug_version():
-    # Local debugging helper. Do not return environment variables or secrets.
-    return (
-        jsonify(
-            {
-                "now_unix": int(time.time()),
-                "pid": os.getpid(),
-                "platform": platform.platform(),
-                "cwd": os.getcwd(),
-                "app_py": os.path.abspath(__file__),
-                "gallery_template_version": GALLERY_TEMPLATE_VERSION,
-            }
-        ),
-        200,
-    )
+    # Global Hooks
+    @app.before_request
+    def attach_current_user():
+        g.current_user = get_current_user()
+        g.visitor_id = request.cookies.get(VISITOR_COOKIE_NAME) or str(uuid.uuid4())
+        g.set_visitor_cookie = (request.cookies.get(VISITOR_COOKIE_NAME) is None)
 
-PLAN_FREE = "free"
-PLAN_PRO = "pro"
-PLAN_BUSINESS = "business"
-PLAN_ORDER = {PLAN_FREE: 0, PLAN_PRO: 1, PLAN_BUSINESS: 2}
-DEFAULT_PLAN_DEFS = {
-    PLAN_FREE: {"name": "Free", "max_tours": 2, "watermark_enabled": 1, "price_monthly_cents": 0},
-    PLAN_PRO: {"name": "Pro", "max_tours": 50, "watermark_enabled": 0, "price_monthly_cents": 4900},
-    PLAN_BUSINESS: {"name": "Business", "max_tours": 500, "watermark_enabled": 0, "price_monthly_cents": 19900},
-}
+    @app.after_request
+    def persist_visitor_cookie(resp):
+        try:
+            if getattr(g, "set_visitor_cookie", False):
+                resp.set_cookie(
+                    VISITOR_COOKIE_NAME,
+                    g.visitor_id,
+                    max_age=60 * 60 * 24 * 730,
+                    httponly=True,
+                    samesite="Lax",
+                )
+        except Exception:
+            pass
+        return resp
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(PROCESSED_FOLDER, exist_ok=True)
+    return app
 
-def natural_sort_key(s):
-    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+app = create_app()
 
-def safe_float(val, default=0.0):
-    try:
-        if isinstance(val, (list, tuple)):
-            if len(val) >= 2 and val[1] != 0: return float(val[0]) / float(val[1])
-            return float(val[0]) if len(val) > 0 else default
-        return float(val)
-    except: return default
-
+# REPLACED: auth_register moved to blueprints/auth.py
+# REPLACED: Core constants moved to backend/core/config.py
+# REPLACED: Utilities moved to backend/core/models.py
 def build_gpano_xmp(width, height):
     # Minimal GPano payload for Facebook/Google-style panorama viewers.
     # Keep ASCII-only to avoid encoding edge cases.
@@ -949,72 +963,9 @@ def looks_like_equirectangular_aspect(aspect_ratio):
         return False
     return 1.9 <= aspect <= 2.1
 
-def _target_thumbnail_size(src_w, src_h, max_size):
-    if src_w <= 0 or src_h <= 0:
-        return (0, 0)
-    ratio = min(max_size[0] / float(src_w), max_size[1] / float(src_h), 1.0)
-    return (max(1, int(round(src_w * ratio))), max(1, int(round(src_h * ratio))))
-
-def ensure_scene_web_pano(tour_id, scene_id, source_filename, web_filename=WEB_PANO_FILENAME, max_size=(6144, 6144), quality=90):
-    """
-    Create a "web-safe" panorama size to avoid extremely large textures that can freeze the browser.
-    Stored next to scene assets under processed_galleries.
-    Returns web_filename when successful, else None.
-    """
-    if not tour_id or not scene_id or not source_filename:
-        return None
-    proc_dir = os.path.join(PROCESSED_FOLDER, tour_id, scene_id)
-    src_path = os.path.join(proc_dir, source_filename)
-    out_path = os.path.join(proc_dir, web_filename)
-    try:
-        if not os.path.exists(src_path):
-            return None
-        old_max = getattr(Image, "MAX_IMAGE_PIXELS", None)
-        try:
-            Image.MAX_IMAGE_PIXELS = None
-        except Exception:
-            pass
-        with Image.open(src_path) as im:
-            im = ImageOps.exif_transpose(im)
-            if im.mode in ("RGBA", "P"):
-                im = im.convert("RGB")
-            target_w, target_h = _target_thumbnail_size(im.width, im.height, max_size)
-            if os.path.exists(out_path):
-                try:
-                    with Image.open(out_path) as existing:
-                        if existing.width == target_w and existing.height == target_h:
-                            return web_filename
-                except Exception:
-                    pass
-            # If the source is already reasonably sized, don't create a redundant web copy.
-            if im.width <= max_size[0] and im.height <= max_size[1]:
-                return None
-            try:
-                resample = Image.Resampling.LANCZOS
-            except Exception:
-                resample = Image.LANCZOS
-            if im.width > max_size[0] or im.height > max_size[1]:
-                im.thumbnail(max_size, resample)
-            im.save(out_path, "JPEG", quality=int(quality), optimize=True, progressive=True, subsampling=0)
-        try:
-            Image.MAX_IMAGE_PIXELS = old_max
-        except Exception:
-            pass
-        return web_filename
-    except Exception as e:
-        app.logger.warning(f"Web pano generation failed: {e}")
-        return None
-
-def ensure_scene_studio_web_pano(tour_id, scene_id, source_filename):
-    return ensure_scene_web_pano(
-        tour_id,
-        scene_id,
-        source_filename,
-        web_filename=STUDIO_WEB_PANO_FILENAME,
-        max_size=(4096, 4096),
-        quality=88,
-    )
-
+# REPLACED: _target_thumbnail_size moved to core
+# REPLACED: ensure_scene_web_pano moved to core
+# REPLACED: ensure_scene_studio_web_pano moved to core
 def ensure_tour_cover_image(tour_row):
     """
     Create/update a cached tour cover image from the configured start scene.
@@ -1382,382 +1333,20 @@ def worker_loop(poll_interval_sec=0.75):
         if not did:
             time.sleep(float(poll_interval_sec))
 
-def now_iso():
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-@app.teardown_appcontext
-def close_db(_error):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
-
-def init_db():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
-    try:
-        db.executescript(
-            """
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                display_name TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                email_verified INTEGER NOT NULL DEFAULT 1,
-                email_verified_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                token_hash TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                user_agent TEXT,
-                ip TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS tours (
-                id TEXT PRIMARY KEY,
-                owner_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                slug TEXT NOT NULL UNIQUE,
-                visibility TEXT NOT NULL CHECK(visibility IN ('public','private')),
-                start_scene_id TEXT,
-                start_pitch REAL,
-                start_yaw REAL,
-                default_hfov REAL,
-                status TEXT NOT NULL DEFAULT 'draft',
-                deleted_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-	            CREATE TABLE IF NOT EXISTS scenes (
-	                id TEXT PRIMARY KEY,
-	                tour_id TEXT NOT NULL,
-	                title TEXT NOT NULL,
-	                panorama_path TEXT,
-	                preview_path TEXT,
-	                images_json TEXT NOT NULL DEFAULT '[]',
-	                order_index INTEGER NOT NULL,
-	                haov REAL NOT NULL DEFAULT 360,
-	                vaov REAL NOT NULL DEFAULT 180,
-                scene_type TEXT NOT NULL DEFAULT 'equirectangular',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS hotspots (
-                id TEXT PRIMARY KEY,
-                tour_id TEXT NOT NULL,
-                from_scene_id TEXT NOT NULL,
-                to_scene_id TEXT NOT NULL,
-                yaw REAL NOT NULL,
-                pitch REAL NOT NULL,
-                entry_yaw REAL,
-                entry_pitch REAL,
-                label TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
-                FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
-                FOREIGN KEY (to_scene_id) REFERENCES scenes(id) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS plans (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                max_tours INTEGER NOT NULL,
-                watermark_enabled INTEGER NOT NULL DEFAULT 1,
-                price_monthly_cents INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                plan_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                billing_provider TEXT NOT NULL DEFAULT 'mock',
-                provider_customer_id TEXT,
-                provider_subscription_id TEXT,
-                current_period_end TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (plan_id) REFERENCES plans(id)
-            );
-                CREATE TABLE IF NOT EXISTS usage_counters (
-                    user_id TEXT PRIMARY KEY,
-                    tours_count INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
-                -- Small KV cache for billing-related runtime ids (e.g., Stripe price ids created from $ amounts in dev).
-	                CREATE TABLE IF NOT EXISTS billing_kv (
-	                    key TEXT PRIMARY KEY,
-	                    value TEXT NOT NULL,
-	                    updated_at TEXT NOT NULL
-	                );
-	                CREATE TABLE IF NOT EXISTS jobs (
-	                    id TEXT PRIMARY KEY,
-	                    kind TEXT NOT NULL,
-	                    owner_id TEXT NOT NULL,
-	                    tour_id TEXT,
-	                    scene_id TEXT,
-	                    status TEXT NOT NULL,
-	                    stage TEXT,
-	                    progress_pct INTEGER NOT NULL DEFAULT 0,
-	                    message TEXT,
-	                    payload_json TEXT NOT NULL DEFAULT '{}',
-	                    result_json TEXT,
-	                    error TEXT,
-	                    created_at TEXT NOT NULL,
-	                    updated_at TEXT NOT NULL,
-	                    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-	                );
-	                CREATE TABLE IF NOT EXISTS analytics_events (
-	                    id TEXT PRIMARY KEY,
-	                    event_type TEXT NOT NULL,
-	                    visitor_id TEXT NOT NULL,
-	                    user_id TEXT,
-	                    tour_id TEXT,
-	                    path TEXT,
-	                    duration_sec INTEGER,
-	                    amount_cents INTEGER,
-	                    currency TEXT,
-	                    dedupe_key TEXT,
-	                    meta_json TEXT NOT NULL DEFAULT '{}',
-	                    created_at TEXT NOT NULL
-	                );
-                    CREATE TABLE IF NOT EXISTS tour_access_grants (
-                        id TEXT PRIMARY KEY,
-                        tour_id TEXT NOT NULL,
-                        user_id TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                    );
-                    CREATE TABLE IF NOT EXISTS email_verification_tokens (
-                        id TEXT PRIMARY KEY,
-                        user_id TEXT NOT NULL,
-                        token_hash TEXT NOT NULL,
-                        expires_at TEXT NOT NULL,
-                        used_at TEXT,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                    );
-                    CREATE TABLE IF NOT EXISTS password_reset_tokens (
-                        id TEXT PRIMARY KEY,
-                        user_id TEXT NOT NULL,
-                        token_hash TEXT NOT NULL,
-                        expires_at TEXT NOT NULL,
-                        used_at TEXT,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                    );
-	                CREATE INDEX IF NOT EXISTS idx_tours_owner ON tours(owner_id);
-	                CREATE INDEX IF NOT EXISTS idx_tours_slug ON tours(slug);
-	                CREATE INDEX IF NOT EXISTS idx_scenes_tour ON scenes(tour_id);
-	                CREATE INDEX IF NOT EXISTS idx_hotspots_scene ON hotspots(from_scene_id);
-	                CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, created_at);
-	                CREATE INDEX IF NOT EXISTS idx_subscriptions_provider_sub ON subscriptions(provider_subscription_id);
-	                CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_id, created_at);
-	                CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
-	                CREATE INDEX IF NOT EXISTS idx_analytics_type_time ON analytics_events(event_type, created_at);
-	                CREATE INDEX IF NOT EXISTS idx_analytics_visitor_time ON analytics_events(visitor_id, created_at);
-	                CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_dedupe ON analytics_events(dedupe_key);
-                    CREATE INDEX IF NOT EXISTS idx_tour_access_tour ON tour_access_grants(tour_id, created_at);
-                    CREATE INDEX IF NOT EXISTS idx_tour_access_user ON tour_access_grants(user_id, created_at);
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_tour_access_unique ON tour_access_grants(tour_id, user_id);
-                    CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id, created_at);
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_email_verify_token_hash ON email_verification_tokens(token_hash);
-                    CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_tokens(user_id, created_at);
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_pwd_reset_token_hash ON password_reset_tokens(token_hash);
-            """
-        )
-        cols = [r[1] for r in db.execute("PRAGMA table_info(hotspots)").fetchall()]
-        if "entry_yaw" not in cols:
-            db.execute("ALTER TABLE hotspots ADD COLUMN entry_yaw REAL")
-        if "entry_pitch" not in cols:
-            db.execute("ALTER TABLE hotspots ADD COLUMN entry_pitch REAL")
-        scene_cols = [r[1] for r in db.execute("PRAGMA table_info(scenes)").fetchall()]
-        if "preview_path" not in scene_cols:
-            db.execute("ALTER TABLE scenes ADD COLUMN preview_path TEXT")
-        if "processing_status" not in scene_cols:
-            db.execute("ALTER TABLE scenes ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'ready'")
-        if "processing_error" not in scene_cols:
-            db.execute("ALTER TABLE scenes ADD COLUMN processing_error TEXT")
-        if "job_id" not in scene_cols:
-            db.execute("ALTER TABLE scenes ADD COLUMN job_id TEXT")
-        tour_cols = [r[1] for r in db.execute("PRAGMA table_info(tours)").fetchall()]
-        if "start_scene_id" not in tour_cols:
-            db.execute("ALTER TABLE tours ADD COLUMN start_scene_id TEXT")
-        if "start_pitch" not in tour_cols:
-            db.execute("ALTER TABLE tours ADD COLUMN start_pitch REAL")
-        if "start_yaw" not in tour_cols:
-            db.execute("ALTER TABLE tours ADD COLUMN start_yaw REAL")
-        if "default_hfov" not in tour_cols:
-            db.execute("ALTER TABLE tours ADD COLUMN default_hfov REAL")
-        user_cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
-        if "email_verified" not in user_cols:
-            db.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
-        if "email_verified_at" not in user_cols:
-            db.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
-        ts = now_iso()
-        for plan_id, d in DEFAULT_PLAN_DEFS.items():
-            db.execute(
-                """
-                INSERT OR IGNORE INTO plans (id, name, max_tours, watermark_enabled, price_monthly_cents, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                (plan_id, d["name"], d["max_tours"], d["watermark_enabled"], d["price_monthly_cents"], ts, ts),
-            )
-        db.commit()
-    finally:
-        db.close()
-
-def hash_token(token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-def app_base_url():
-    return (os.getenv("APP_BASE_URL") or request.url_root.rstrip("/")).strip()
-
-def email_verification_enabled():
-    raw = (os.getenv("EMAIL_VERIFICATION_ENABLED") or "1").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-def create_email_verification_token(user_id):
-    token = secrets.token_urlsafe(48)
-    token_hash = hash_token(token)
-    ts = now_iso()
-    expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=EMAIL_VERIFICATION_TTL_SEC)).replace(microsecond=0).isoformat() + "Z"
-    db = get_db()
-    db.execute(
-        """
-        INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
-        VALUES (?, ?, ?, ?, NULL, ?)
-        """,
-        (str(uuid.uuid4()), user_id, token_hash, expires, ts),
-    )
-    db.commit()
-    return token
-
-def send_resend_email(recipient_email, subject, html):
-    api_key = (os.getenv("RESEND_API_KEY") or "").strip()
-    mail_from = (os.getenv("MAIL_FROM") or "").strip()
-    if not api_key or not mail_from:
-        app.logger.warning("Email send skipped: RESEND_API_KEY or MAIL_FROM is missing")
-        return False, "mail_not_configured"
-    payload = {
-        "from": mail_from,
-        "to": [recipient_email],
-        "subject": subject,
-        "html": html,
-    }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Pan-o-Rama/1.0 (+https://pan-o-rama.online)",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            ok = 200 <= resp.status < 300
-            if not ok:
-                return False, f"resend_http_{resp.status}"
-            return True, None
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode("utf-8", errors="ignore")
-        except Exception:
-            body = ""
-        app.logger.warning("Resend HTTPError %s: %s", e.code, body[:500])
-        return False, f"resend_http_{e.code}"
-    except Exception as e:
-        app.logger.warning("Resend send failed: %s", e)
-        return False, "resend_send_failed"
-
-def send_verification_email(recipient_email, token):
-    verify_url = f"{app_base_url()}/auth/verify?token={token}"
-    return send_resend_email(
-        recipient_email,
-        "Confirm your Pan-o-Rama account",
-        (
-            "<p>Welcome to Pan-o-Rama.</p>"
-            "<p>Confirm your email to activate your account:</p>"
-            f"<p><a href=\"{verify_url}\">{verify_url}</a></p>"
-            "<p>This link expires in 24 hours.</p>"
-        ),
-    )
-
-def create_password_reset_token(user_id):
-    token = secrets.token_urlsafe(48)
-    token_hash = hash_token(token)
-    ts = now_iso()
-    expires = (datetime.datetime.utcnow() + datetime.timedelta(seconds=PASSWORD_RESET_TTL_SEC)).replace(microsecond=0).isoformat() + "Z"
-    db = get_db()
-    db.execute(
-        """
-        INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
-        VALUES (?, ?, ?, ?, NULL, ?)
-        """,
-        (str(uuid.uuid4()), user_id, token_hash, expires, ts),
-    )
-    db.commit()
-    return token
-
-def send_password_reset_email(recipient_email, token):
-    reset_url = f"{app_base_url()}/reset-password?token={token}"
-    return send_resend_email(
-        recipient_email,
-        "Reset your Pan-o-Rama password",
-        (
-            "<p>We received a request to reset your Pan-o-Rama password.</p>"
-            f"<p><a href=\"{reset_url}\">{reset_url}</a></p>"
-            "<p>This link expires in 1 hour. If you didn't request this, ignore this email.</p>"
-        ),
-    )
-
-def queue_verification_email(user_id, email):
-    token = create_email_verification_token(user_id)
-    ok, err = send_verification_email(email, token)
-    return ok, err
-
-def get_current_user():
-    token = request.cookies.get("session_token")
-    if not token:
-        return None
-    db = get_db()
-    token_h = hash_token(token)
-    row = db.execute(
-        """
-        SELECT u.*
-        FROM sessions s
-        JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active'
-        """,
-        (token_h, now_iso()),
-    ).fetchone()
-    return row
-
+# REPLACED: now_iso moved to backend/core/models.py
+# REPLACED: get_db, close_db moved to backend/core/database.py
+# REPLACED: init_db moved to core
+# REPLACED: hash_token moved to core
+# REPLACED: app_base_url moved to services/email_service.py
+# REPLACED: email_verification_enabled moved to services/email_service.py
+# REPLACED: create_email_verification_token moved to services/email_service.py
+# REPLACED: send_resend_email moved to services/email_service.py
+# REPLACED: send_verification_email moved to services/email_service.py
+# REPLACED: create_password_reset_token moved to services/email_service.py
+# REPLACED: send_password_reset_email moved to services/email_service.py
+# REPLACED: queue_verification_email moved to services/email_service.py
+# REPLACED: get_current_user moved to core
 @app.before_request
 def attach_current_user():
     g.current_user = get_current_user()
@@ -1781,15 +1370,7 @@ def persist_visitor_cookie(resp):
         pass
     return resp
 
-def require_auth(view_fn):
-    @functools.wraps(view_fn)
-    def wrapper(*args, **kwargs):
-        if g.current_user is None:
-            return jsonify({"error": "Unauthorized"}), 401
-        return view_fn(*args, **kwargs)
-    return wrapper
-
-
+# REPLACED: require_auth moved to core
 def get_admin_analytics_password():
     return (os.getenv("ADMIN_ANALYTICS_PASSWORD") or "").strip()
 
@@ -1861,48 +1442,8 @@ def slugify(title):
         base = "tour"
     return f"{base}-{secrets.token_hex(3)}"
 
-def serialize_tour(row):
-    return {
-        "id": row["id"],
-        "owner_id": row["owner_id"],
-        "title": row["title"],
-        "description": row["description"],
-        "slug": row["slug"],
-        "visibility": row["visibility"],
-        "start_scene_id": row["start_scene_id"] if "start_scene_id" in row.keys() else None,
-        "start_pitch": row["start_pitch"] if "start_pitch" in row.keys() else None,
-        "start_yaw": row["start_yaw"] if "start_yaw" in row.keys() else None,
-        "default_hfov": row["default_hfov"] if "default_hfov" in row.keys() else None,
-        "status": row["status"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-def serialize_scene(row):
-    studio_web_pano = None
-    try:
-        pano_name = row["panorama_path"]
-        if pano_name:
-            studio_web_pano = ensure_scene_studio_web_pano(row["tour_id"], row["id"], pano_name)
-    except Exception:
-        studio_web_pano = None
-    return {
-        "id": row["id"],
-        "tour_id": row["tour_id"],
-        "name": row["title"],
-        "panorama": row["panorama_path"],
-        "web": studio_web_pano,
-        "preview": row["preview_path"],
-        "images": json.loads(row["images_json"] or "[]"),
-        "haov": row["haov"],
-        "vaov": row["vaov"],
-        "type": row["scene_type"],
-        "order_index": row["order_index"],
-        "processing_status": row["processing_status"],
-        "processing_error": row["processing_error"],
-        "job_id": row["job_id"],
-    }
-
+# REPLACED: serialize_tour moved to core
+# REPLACED: serialize_scene moved to core
 def parse_optional_float(value, field_name, min_value=None, max_value=None):
     if value is None:
         return None
@@ -1944,24 +1485,7 @@ def billing_kv_set(key, value):
     db.commit()
 
 
-def serialize_job(row):
-    return {
-        "id": row["id"],
-        "kind": row["kind"],
-        "owner_id": row["owner_id"],
-        "tour_id": row["tour_id"],
-        "scene_id": row["scene_id"],
-        "status": row["status"],
-        "stage": row["stage"],
-        "progress_pct": int(row["progress_pct"] or 0),
-        "message": row["message"],
-        "result": json.loads(row["result_json"] or "null"),
-        "error": row["error"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
+# REPLACED: serialize_job moved to core
 def jobs_create(kind, owner_id, payload, tour_id=None, scene_id=None):
     jid = str(uuid.uuid4())
     ts = now_iso()
@@ -2008,14 +1532,7 @@ def jobs_get_for_owner(jid, owner_id):
     return row
 
 
-@app.route("/jobs/<job_id>", methods=["GET"])
-@require_auth
-def jobs_get(job_id):
-    row = jobs_get_for_owner(job_id, g.current_user["id"])
-    if row is None:
-        return jsonify({"error": "Job not found"}), 404
-    return jsonify({"job": serialize_job(row)}), 200
-
+# REPLACED: auth_login moved to blueprints/auth.py
 def parse_usd_dollars_to_cents(raw):
     """
     Accepts strings like '5', '50', '5.00' and returns integer cents (500, 5000, ...).
@@ -2094,103 +1611,14 @@ def configured_stripe_price_id(plan_id, allow_create=False):
         app.logger.error(f"Stripe price auto-create failed: {e}")
         return None
 
-def get_plan_row(plan_id):
-    db = get_db()
-    return db.execute("SELECT * FROM plans WHERE id = ? AND is_active = 1", (plan_id,)).fetchone()
-
-def get_active_subscription(user_id):
-    db = get_db()
-    return db.execute(
-        """
-        SELECT * FROM subscriptions
-        WHERE user_id = ? AND status = 'active'
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (user_id,),
-    ).fetchone()
-
-def set_user_plan(user_id, plan_id, provider="mock", status="active", provider_customer_id=None, provider_subscription_id=None, period_end=None):
-    if plan_id not in PLAN_ORDER:
-        plan_id = PLAN_FREE
-    db = get_db()
-    ts = now_iso()
-    db.execute("UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE user_id = ? AND status = 'active'", (ts, user_id))
-    sub_id = str(uuid.uuid4())
-    db.execute(
-        """
-        INSERT INTO subscriptions (
-            id, user_id, plan_id, status, billing_provider, provider_customer_id, provider_subscription_id, current_period_end, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (sub_id, user_id, plan_id, status, provider, provider_customer_id, provider_subscription_id, period_end, ts, ts),
-    )
-    db.commit()
-    return db.execute("SELECT * FROM subscriptions WHERE id = ?", (sub_id,)).fetchone()
-
-def ensure_user_subscription(user_id):
-    sub = get_active_subscription(user_id)
-    if sub is not None:
-        return sub
-    return set_user_plan(user_id, PLAN_FREE, provider="mock")
-
-def get_user_plan(user_id):
-    sub = ensure_user_subscription(user_id)
-    plan = get_plan_row(sub["plan_id"]) if sub is not None else None
-    if plan is None:
-        # Fallback safety for broken references.
-        plan = get_plan_row(PLAN_FREE)
-    return plan, sub
-
-def compute_usage(user_id):
-    db = get_db()
-    row = db.execute(
-        """
-        SELECT COUNT(*) AS tours_count
-        FROM tours
-        WHERE owner_id = ? AND deleted_at IS NULL
-        """,
-        (user_id,),
-    ).fetchone()
-    count = int(row["tours_count"] if row else 0)
-    db.execute(
-        """
-        INSERT INTO usage_counters (user_id, tours_count, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET tours_count = excluded.tours_count, updated_at = excluded.updated_at
-        """,
-        (user_id, count, now_iso()),
-    )
-    db.commit()
-    return {"tours_count": count}
-
-def get_user_entitlements(user_id):
-    plan, sub = get_user_plan(user_id)
-    usage = compute_usage(user_id)
-    max_tours = int(plan["max_tours"]) if plan is not None else DEFAULT_PLAN_DEFS[PLAN_FREE]["max_tours"]
-    watermark = bool(plan["watermark_enabled"]) if plan is not None else True
-    remaining = max(0, max_tours - usage["tours_count"])
-    return {
-        "plan_id": plan["id"] if plan is not None else PLAN_FREE,
-        "plan_name": plan["name"] if plan is not None else DEFAULT_PLAN_DEFS[PLAN_FREE]["name"],
-        "max_tours": max_tours,
-        "watermark_enabled": watermark,
-        "usage": usage,
-        "remaining_tours": remaining,
-        "subscription": {
-            "status": sub["status"] if sub is not None else "active",
-            "billing_provider": sub["billing_provider"] if sub is not None else "mock",
-            "current_period_end": sub["current_period_end"] if sub is not None else None,
-        },
-    }
-
-def current_user_is_business():
-    user = getattr(g, "current_user", None)
-    if user is None:
-        return False
-    ent = get_user_entitlements(user["id"])
-    return ent.get("plan_id") == PLAN_BUSINESS
-
+# REPLACED: get_plan_row moved to services/billing_service.py
+# REPLACED: get_active_subscription moved to services/billing_service.py
+# REPLACED: set_user_plan moved to services/billing_service.py
+# REPLACED: ensure_user_subscription moved to services/billing_service.py
+# REPLACED: get_user_plan moved to services/billing_service.py
+# REPLACED: compute_usage moved to services/billing_service.py
+# REPLACED: get_user_entitlements moved to services/billing_service.py
+# REPLACED: current_user_is_business moved to services/billing_service.py
 def can_view_private_tour(tour_row):
     user = getattr(g, "current_user", None)
     if user is None:
@@ -2243,32 +1671,7 @@ def list_tour_access_entries(tour_id):
         for r in rows
     ]
 
-def create_session_response(user_row):
-    db = get_db()
-    session_token = secrets.token_urlsafe(48)
-    expires = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).replace(microsecond=0).isoformat() + "Z"
-    db.execute(
-        """
-        INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            str(uuid.uuid4()),
-            user_row["id"],
-            hash_token(session_token),
-            expires,
-            now_iso(),
-            request.headers.get("User-Agent", ""),
-            request.remote_addr or "",
-        ),
-    )
-    db.commit()
-    payload = {"id": user_row["id"], "email": user_row["email"], "display_name": user_row["display_name"]}
-    resp = jsonify({"user": payload})
-    max_age = 7 * 24 * 3600
-    resp.set_cookie("session_token", session_token, httponly=True, samesite="Lax", secure=False, max_age=max_age)
-    return resp
-
+# REPLACED: create_session_response moved to core
 def load_tour_scenes_and_hotspots(tour_id):
     db = get_db()
     scene_rows = db.execute(
@@ -2412,212 +1815,15 @@ def load_disk_scenes_from_index_html(tour_id):
     except Exception:
         return []
 
-@app.route("/auth/register", methods=["POST"])
-def auth_register():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    display_name = (data.get("display_name") or email.split("@")[0] or "User").strip()
-    if "@" not in email or len(password) < 8:
-        return jsonify({"error": "Invalid email or password (min 8 chars)"}), 400
-    db = get_db()
-    exists = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
-    if exists:
-        return jsonify({"error": "Email already exists"}), 409
-    uid = str(uuid.uuid4())
-    ts = now_iso()
-    verify_on = email_verification_enabled()
-    email_verified = 0 if verify_on else 1
-    email_verified_at = None if verify_on else ts
-    db.execute(
-        "INSERT INTO users (id, email, password_hash, display_name, email_verified, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (uid, email, generate_password_hash(password), display_name or "User", email_verified, email_verified_at, ts, ts),
-    )
-    db.commit()
-    set_user_plan(uid, PLAN_FREE, provider="mock")
-    if not verify_on:
-        row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
-        return create_session_response(row), 201
-    ok, err = queue_verification_email(uid, email)
-    return (
-        jsonify(
-            {
-                "message": "Registration successful. Check your email to verify your account.",
-                "email_sent": bool(ok),
-                "email_error": err,
-            }
-        ),
-        201,
-    )
-
-@app.route("/auth/login", methods=["POST"])
-def auth_login():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    db = get_db()
-    row = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if row is None or not check_password_hash(row["password_hash"], password):
-        return jsonify({"error": "Invalid credentials"}), 401
-    if email_verification_enabled() and int(row["email_verified"] or 0) != 1:
-        return jsonify({"error": "Please verify your email before login", "code": "email_not_verified"}), 403
-    return create_session_response(row), 200
-
-@app.route("/auth/verification/resend", methods=["POST"])
-def auth_verification_resend():
-    if not email_verification_enabled():
-        return jsonify({"message": "Email verification is temporarily disabled"}), 200
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if "@" not in email:
-        return jsonify({"error": "Invalid email"}), 400
-    db = get_db()
-    row = db.execute("SELECT id, email_verified FROM users WHERE email = ?", (email,)).fetchone()
-    if row is None:
-        return jsonify({"message": "If the account exists, verification email has been sent"}), 200
-    if int(row["email_verified"] or 0) == 1:
-        return jsonify({"message": "Email is already verified"}), 200
-    ok, err = queue_verification_email(row["id"], email)
-    return jsonify({"message": "Verification email sent", "email_sent": bool(ok), "email_error": err}), 200
-
-@app.route("/auth/verify", methods=["GET"])
-def auth_verify():
-    token = (request.args.get("token") or "").strip()
-    if not token:
-        return redirect("/login?verified=0&reason=missing_token", code=302)
-    token_hash = hash_token(token)
-    db = get_db()
-    row = db.execute(
-        """
-        SELECT t.id AS token_id, t.user_id, t.expires_at, t.used_at, u.email_verified
-        FROM email_verification_tokens t
-        JOIN users u ON u.id = t.user_id
-        WHERE t.token_hash = ?
-        """,
-        (token_hash,),
-    ).fetchone()
-    if row is None:
-        return redirect("/login?verified=0&reason=invalid_token", code=302)
-    if row["used_at"] is not None:
-        return redirect("/login?verified=1", code=302)
-    if row["expires_at"] <= now_iso():
-        return redirect("/login?verified=0&reason=expired", code=302)
-    ts = now_iso()
-    db.execute(
-        "UPDATE users SET email_verified = 1, email_verified_at = ?, updated_at = ? WHERE id = ?",
-        (ts, ts, row["user_id"]),
-    )
-    db.execute("UPDATE email_verification_tokens SET used_at = ? WHERE id = ?", (ts, row["token_id"]))
-    db.commit()
-    return redirect("/login?verified=1", code=302)
-
-@app.route("/auth/password/forgot", methods=["POST"])
-def auth_password_forgot():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if "@" not in email:
-        return jsonify({"error": "Invalid email"}), 400
-    db = get_db()
-    row = db.execute("SELECT id FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
-    if row is not None:
-        try:
-            token = create_password_reset_token(row["id"])
-            send_password_reset_email(email, token)
-        except Exception as e:
-            app.logger.warning("Password reset email send failed: %s", e)
-    return jsonify({"message": "If the account exists, a reset link has been sent"}), 200
-
-@app.route("/auth/password/reset/validate", methods=["GET"])
-def auth_password_reset_validate():
-    token = (request.args.get("token") or "").strip()
-    if not token:
-        return jsonify({"valid": False, "reason": "missing_token"}), 400
-    token_hash = hash_token(token)
-    db = get_db()
-    row = db.execute(
-        """
-        SELECT id, expires_at, used_at
-        FROM password_reset_tokens
-        WHERE token_hash = ?
-        """,
-        (token_hash,),
-    ).fetchone()
-    if row is None:
-        return jsonify({"valid": False, "reason": "invalid_token"}), 200
-    if row["used_at"] is not None:
-        return jsonify({"valid": False, "reason": "already_used"}), 200
-    if row["expires_at"] <= now_iso():
-        return jsonify({"valid": False, "reason": "expired"}), 200
-    return jsonify({"valid": True}), 200
-
-@app.route("/auth/password/reset", methods=["POST"])
-def auth_password_reset():
-    data = request.get_json(silent=True) or {}
-    token = (data.get("token") or "").strip()
-    new_password = data.get("new_password") or ""
-    if not token:
-        return jsonify({"error": "Missing token"}), 400
-    if len(new_password) < 8:
-        return jsonify({"error": "new_password must be at least 8 characters"}), 400
-    token_hash = hash_token(token)
-    db = get_db()
-    row = db.execute(
-        """
-        SELECT id, user_id, expires_at, used_at
-        FROM password_reset_tokens
-        WHERE token_hash = ?
-        """,
-        (token_hash,),
-    ).fetchone()
-    if row is None:
-        return jsonify({"error": "Invalid token"}), 400
-    if row["used_at"] is not None:
-        return jsonify({"error": "Token already used"}), 400
-    if row["expires_at"] <= now_iso():
-        return jsonify({"error": "Token expired"}), 400
-    ts = now_iso()
-    db.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (generate_password_hash(new_password), ts, row["user_id"]))
-    db.execute("UPDATE password_reset_tokens SET used_at = ? WHERE id = ?", (ts, row["id"]))
-    db.execute("DELETE FROM sessions WHERE user_id = ?", (row["user_id"],))
-    db.commit()
-    return jsonify({"message": "Password updated"}), 200
-
-@app.route("/auth/logout", methods=["POST"])
-def auth_logout():
-    token = request.cookies.get("session_token")
-    if token:
-        db = get_db()
-        db.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_token(token),))
-        db.commit()
-    resp = jsonify({"message": "Logged out"})
-    resp.delete_cookie("session_token")
-    return resp, 200
-
-@app.route("/me", methods=["GET"])
-@require_auth
-def me_get():
-    u = g.current_user
-    ent = get_user_entitlements(u["id"])
-    return jsonify(
-        {
-            "id": u["id"],
-            "email": u["email"],
-            "email_verified": bool(int(u["email_verified"] or 0)),
-            "display_name": u["display_name"],
-            "plan": {
-                "id": ent["plan_id"],
-                "name": ent["plan_name"],
-            },
-            "entitlements": {
-                "max_tours": ent["max_tours"],
-                "watermark_enabled": ent["watermark_enabled"],
-                "remaining_tours": ent["remaining_tours"],
-            },
-            "usage": ent["usage"],
-            "subscription": ent["subscription"],
-        }
-    ), 200
-
+# REPLACED: auth_verification_resend moved to blueprints/auth.py
+# REPLACED: auth_verify moved to blueprints/auth.py
+# REPLACED: auth_password_forgot moved to blueprints/auth.py
+# REPLACED: auth_password_reset_validate moved to blueprints/auth.py
+# REPLACED: auth_password_reset moved to blueprints/auth.py
+# REPLACED: auth_logout moved to blueprints/auth.py
+# REPLACED: me_get moved to blueprints/users.py
+# REPLACED: me_patch moved to blueprints/users.py
+# REPLACED: me_password moved to blueprints/users.py
 @app.route("/me", methods=["PATCH"])
 @require_auth
 def me_patch():
@@ -3767,24 +2973,37 @@ def index():
     return send_from_directory(FRONTEND_FOLDER, 'index.html')
 
 @app.route('/login')
+@app.route('/login.html')
 def login_page():
     return send_from_directory(FRONTEND_FOLDER, 'login.html')
 
 @app.route('/reset-password')
+@app.route('/reset_password.html')
 def reset_password_page():
     return send_from_directory(FRONTEND_FOLDER, 'reset_password.html')
 
 @app.route('/dashboard')
+@app.route('/dashboard.html')
 def dashboard_page():
     return send_from_directory(FRONTEND_FOLDER, 'dashboard.html')
 
 @app.route('/account')
+@app.route('/account.html')
 def account_page():
     return send_from_directory(FRONTEND_FOLDER, 'account.html')
 
 @app.route('/admin/analytics')
+@app.route('/admin_analytics.html')
 def admin_analytics_page():
     return send_from_directory(FRONTEND_FOLDER, 'admin_analytics.html')
+
+@app.route('/css/<path:filename>')
+def static_css(filename):
+    return send_from_directory(os.path.join(FRONTEND_FOLDER, 'css'), filename)
+
+@app.route('/js/<path:filename>')
+def static_js(filename):
+    return send_from_directory(os.path.join(FRONTEND_FOLDER, 'js'), filename)
 
 @app.route('/img/<path:filename>')
 def static_img(filename):
@@ -4979,7 +4198,5 @@ def serve_gallery_files(project_id, filename):
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
-init_db()
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# REPLACED: init_db() called inside create_app()

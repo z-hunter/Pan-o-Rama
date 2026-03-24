@@ -3,311 +3,276 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Dashboard - Pan-o-Rama</title>
+  <title>Dashboard - Lokalny Obiektyw</title>
+  <link rel="stylesheet" href="/css/main.css?v=5" />
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: Segoe UI, sans-serif; margin: 0; background: #f1f4f8; color: #222; }
-    .top { background: #fff; border-bottom: 1px solid #d9e2ef; padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .wrap { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
-    .card { background: #fff; border: 1px solid #d9e2ef; border-radius: 10px; padding: 16px; margin-bottom: 18px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-    .tour { background: #fff; border: 1px solid #d9e2ef; border-radius: 10px; padding: 12px; }
-    input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; margin-top: 6px; }
-    button { padding: 9px 12px; border: 0; border-radius: 6px; background: #007bff; color: #fff; cursor: pointer; }
-    .muted { color: #667; font-size: 13px; }
-    .row { margin-bottom: 10px; }
-    .danger { background: #c53d3d; }
-    .plan { background: #f8fbff; border: 1px solid #d9e2ef; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
-    .meter { height: 8px; background: #e6edf5; border-radius: 999px; overflow: hidden; margin-top: 6px; }
-    .meter > div { height: 100%; background: #2b7de9; }
-    .upgrade { background: #1e57a8; }
-    .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef3f8; border:1px solid #d9e2ef; margin-left:6px; }
-    .access-box { margin-top:10px; padding:10px; border:1px dashed #ccd7e5; border-radius:8px; background:#fafcff; }
-    .access-row { display:flex; gap:8px; align-items:center; margin-top:6px; }
-    .access-row input { margin-top:0; }
-    .access-list { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
-    .access-item { display:flex; align-items:center; justify-content:space-between; gap:8px; background:#fff; border:1px solid #e5ebf4; border-radius:8px; padding:6px 8px; }
-    .mini { padding:6px 8px; font-size:12px; }
-    .save-state { min-width: 78px; font-size: 12px; color: #5f6f86; }
-    @media (max-width: 720px) {
-      .wrap { margin: 14px auto; padding: 0 12px calc(18px + env(safe-area-inset-bottom, 0px)); }
-      .grid { grid-template-columns: 1fr; }
-      .top > div { width: 100%; display: flex; gap: 10px; flex-wrap: wrap; }
-      .top button { width: 100%; }
-      .access-row { flex-wrap: wrap; align-items: stretch; }
-      .access-row input, .access-row button, .access-row select { width: 100%; }
-      .tour > div[style*='display:flex'] { flex-direction: column; }
-      .tour > div[style*='display:flex'] button { width: 100%; }
+    .dashboard-container {
+      padding: 32px 0;
+    }
+    
+    /* Optimized Grid: strictly 3 columns on desktop */
+    #tours-grid {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: repeat(3, 1fr);
+    }
+    
+    @media (max-width: 1024px) {
+      #tours-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      #tours-grid { grid-template-columns: 1fr; }
+    }
+
+    .tour-card {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      transition: border-color 0.2s;
+    }
+    .tour-card:hover {
+      border-color: var(--primary);
+    }
+    .tour-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background-color: #050505;
+      background-size: cover;
+      background-position: center;
+      border-bottom: 1px solid var(--border);
+      position: relative; /* Fixed: keeps badges inside the thumb */
+    }
+    .tour-content {
+      padding: 16px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .tour-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .tour-footer {
+      padding: 8px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #080808;
+    }
+
+    /* Header Plan Info */
+    .header-plan-info {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-right: 24px;
+      padding-right: 24px;
+      border-right: 1px solid var(--border);
+    }
+    
+    .header-progress-wrap {
+      width: 100px;
+      height: 4px;
+      background: #222;
+      position: relative;
+      overflow: hidden;
+    }
+    .header-progress-fill {
+      position: absolute;
+      left: 0; top: 0; height: 100%;
+      background: var(--primary);
+      width: 0%;
+      transition: width 0.5s;
+    }
+
+    /* Modal Tweaks */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(4px);
     }
   </style>
 </head>
 <body>
-  <div class="top">
-    <strong>Pan-o-Rama Dashboard</strong>
-    <div>
-      <a href="/account">Account</a>
-      <button style="margin-left:10px" onclick="logout()">Logout</button>
+  <header class="header">
+    <div class="logo">
+      <img src="/img/logo.png" alt="LO" />
+      <span>STUDIO_DASHBOARD</span>
     </div>
-  </div>
-
-  <div class="wrap">
-    <div class="plan">
-      <div><strong id="planName">-</strong></div>
-      <div class="muted" id="planUsage">-</div>
-      <div class="meter"><div id="planBar" style="width:0%"></div></div>
-      <div style="margin-top:8px">
-        <button class="upgrade" onclick="location.href='/account'">Upgrade plan</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Create Tour</h3>
-      <div class="row"><input id="title" placeholder="Tour title" /></div>
-      <div class="row"><textarea id="description" placeholder="Description"></textarea></div>
-      <div class="row">
-        <select id="visibility">
-          <option value="public">Public</option>
-          <option value="private">Private (owner only)</option>
-        </select>
-      </div>
-      <button onclick="createTour()">Create</button>
-      <p id="createMsg" class="muted"></p>
-    </div>
-
-    <h3>My Tours</h3>
-    <div id="tours" class="grid"></div>
-  </div>
-
-<script>
-let currentPlanId = null;
-
-async function api(url, opts = {}) {
-  const res = await fetch(url, opts);
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401) {
-    location.href = '/login';
-    return null;
-  }
-  return { res, data };
-}
-
-async function loadMe() {
-  const out = await api('/me');
-  if (!out) return;
-  if (!out.res.ok) return;
-  const plan = out.data.plan || {};
-  const usage = out.data.usage || {};
-  const ent = out.data.entitlements || {};
-  const tours = usage.tours_count || 0;
-  const maxTours = ent.max_tours || 0;
-  const ratio = maxTours > 0 ? Math.min(100, Math.round((tours / maxTours) * 100)) : 0;
-  planName.textContent = `${plan.name || 'Free'} plan`;
-  planUsage.textContent = `Tours: ${tours} / ${maxTours} | Remaining: ${ent.remaining_tours ?? 0}`;
-  planBar.style.width = `${ratio}%`;
-  currentPlanId = (plan.id || '').toLowerCase();
-  const privateOpt = document.querySelector('#visibility option[value="private"]');
-  if (privateOpt) {
-    const free = currentPlanId === 'free';
-    privateOpt.disabled = free;
-    privateOpt.textContent = free ? 'Private (paid plan required)' : 'Private (author + allowed users)';
-    if (free && visibility.value === 'private') visibility.value = 'public';
-  }
-}
-
-async function loadTours() {
-  const out = await api('/tours/my');
-  if (!out) return;
-  const list = out.data.tours || [];
-  tours.innerHTML = '';
-  for (const t of list) {
-    const el = document.createElement('div');
-    el.className = 'tour';
-    const visibilityPill = t.visibility === 'private' ? '<span class="pill">private</span>' : '<span class="pill">public</span>';
-    const isFree = currentPlanId === 'free';
-    const privateDisabled = isFree && t.visibility !== 'private';
-    el.innerHTML = `
-      <h4 style="margin:0 0 6px">${t.title}</h4>
-      <div class="muted">${visibilityPill} ${t.status}</div>
-      <div class="muted">slug: ${t.slug}</div>
-        <div class="access-row" style="margin-top:8px;">
-          <select id="tourVisibility-${t.id}" onchange="saveTourVisibility('${t.id}')">
-            <option value="public" ${t.visibility === 'public' ? 'selected' : ''}>Public</option>
-            <option value="private" ${t.visibility === 'private' ? 'selected' : ''} ${privateDisabled ? 'disabled' : ''}>Private</option>
-          </select>
-          <span class="save-state" id="tourVisibilityState-${t.id}"></span>
+    
+    <div class="flex items-center">
+      <div class="header-plan-info" id="plan-header-info">
+        <div class="flex flex-column items-end">
+          <span class="badge" id="plan-badge" style="font-size: 9px; margin-bottom: 4px;">PLAN</span>
+          <span class="mono" id="plan-usage" style="font-size: 10px; color: var(--text-muted);">QUOTA: 0/0</span>
         </div>
-      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-        <button onclick="openStudio('${t.id}')">Open Studio</button>
-        <button onclick="openShare('${t.slug}')">Open share</button>
-        <button onclick="finalize('${t.id}')">Finalize</button>
-        <button class="danger" onclick="removeTour('${t.id}')">Delete</button>
-      </div>
-      ${t.visibility === 'private' ? `
-      <div class="access-box">
-        <div class="muted">Access list (users who can open this private tour)</div>
-        <div class="access-row">
-          <input id="accessEmail-${t.id}" placeholder="user@email.com" />
-          <button class="mini" onclick="grantAccess('${t.id}')">Add</button>
+        <div class="header-progress-wrap">
+          <div class="header-progress-fill" id="plan-progress"></div>
         </div>
-        <div id="accessList-${t.id}" class="access-list"></div>
-      </div>` : ''}
-    `;
-    tours.appendChild(el);
-    if (t.visibility === 'private') {
-      loadAccessList(t.id);
-    }
-  }
-}
+      </div>
+      
+      <nav class="nav-links">
+        <a href="/dashboard.html" class="nav-link active">Tours</a>
+        <a href="/account.html" class="nav-link">Account</a>
+        <button class="btn btn-ghost btn-sm" onclick="logout()">LOGOUT</button>
+      </nav>
+    </div>
+  </header>
 
-async function saveTourVisibility(tourId) {
-  const sel = document.getElementById(`tourVisibility-${tourId}`);
-  const state = document.getElementById(`tourVisibilityState-${tourId}`);
-  if (!sel) return;
-  if (state) state.textContent = 'Saving...';
-  const visibility = sel.value;
-  const out = await api(`/tours/${tourId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ visibility })
-  });
-  if (!out) return;
-  if (!out.res.ok) {
-    if (state) state.textContent = 'Error';
-    if (out.data && out.data.code === 'private_requires_paid_plan') {
-      alert('Private tours require paid plan. Please upgrade.');
-    } else {
-      alert(out.data.error || 'Failed to update visibility');
-    }
-    await loadMe();
-    await loadTours();
-    return;
-  }
-  if (state) {
-    state.textContent = 'Saved';
-    setTimeout(() => {
-      const cur = document.getElementById(`tourVisibilityState-${tourId}`);
-      if (cur) cur.textContent = '';
-    }, 1200);
-  }
-  await loadMe();
-  await loadTours();
-}
-
-async function createTour() {
-  const payload = {
-    title: title.value.trim(),
-    description: description.value.trim(),
-    visibility: visibility.value
-  };
-  const out = await api('/tours', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!out) return;
-  if (!out.res.ok && out.data && out.data.code === 'private_requires_paid_plan') {
-    createMsg.innerHTML = `Private tours require paid plan. <a href="/account">Upgrade in Account</a>`;
-    return;
-  }
-  if (!out.res.ok && out.data && out.data.code === 'plan_limit_exceeded') {
-    createMsg.innerHTML = `Plan limit reached. <a href="/account">Upgrade in Account</a>`;
-  } else {
-    createMsg.textContent = out.res.ok ? 'Tour created' : (out.data.error || 'Failed');
-  }
-  if (out.res.ok) {
-    title.value = '';
-    description.value = '';
-    await loadMe();
-    await loadTours();
-  }
-}
-
-function renderAccessList(tourId, items) {
-  const box = document.getElementById(`accessList-${tourId}`);
-  if (!box) return;
-  const list = Array.isArray(items) ? items : [];
-  if (!list.length) {
-    box.innerHTML = `<div class="muted">No additional users added yet.</div>`;
-    return;
-  }
-  box.innerHTML = list.map(x => `
-    <div class="access-item">
+  <main class="container dashboard-container">
+    <div class="flex justify-between items-center mb-10">
       <div>
-        <strong>${x.display_name || 'User'}</strong>
-        <div class="muted">${x.email}</div>
+        <h1 style="font-size: 24px;">Project Library</h1>
+        <p class="muted mono" style="font-size: 11px;">Operator: <span id="user-name">...</span></p>
       </div>
-      <button class="danger mini" onclick="revokeAccess('${tourId}','${x.user_id}')">Remove</button>
+      <button class="btn btn-primary" onclick="showCreateModal()">
+        + NEW TOUR
+      </button>
     </div>
-  `).join('');
-}
 
-async function loadAccessList(tourId) {
-  const out = await api(`/tours/${tourId}/access`);
-  if (!out || !out.res.ok) return;
-  renderAccessList(tourId, out.data.items || []);
-}
+    <div id="tours-grid">
+      <!-- Tours loaded via JS -->
+    </div>
+  </main>
 
-async function grantAccess(tourId) {
-  const input = document.getElementById(`accessEmail-${tourId}`);
-  if (!input) return;
-  const email = input.value.trim().toLowerCase();
-  if (!email) return;
-  const out = await api(`/tours/${tourId}/access`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email })
-  });
-  if (!out) return;
-  if (!out.res.ok) {
-    alert(out.data.error || 'Failed to grant access');
-    return;
-  }
-  input.value = '';
-  renderAccessList(tourId, out.data.items || []);
-}
+  <div id="create-modal" class="modal-overlay" onclick="closeCreateModal()">
+    <div class="modal-content card" onclick="event.stopPropagation()">
+      <h2 class="mb-6">New Sequence</h2>
+      <form onsubmit="handleCreateTour(event)">
+        <div class="mb-4">
+          <label class="block mb-1">Title</label>
+          <input id="title" placeholder="IDENTIFIER" required />
+        </div>
+        <div class="mb-4">
+          <label class="block mb-1">Description</label>
+          <textarea id="description" rows="3"></textarea>
+        </div>
+        <div class="mb-6">
+          <label class="block mb-1">Access Protocol</label>
+          <select id="visibility">
+            <option value="public">Public</option>
+            <option value="private">Private (Restricted)</option>
+          </select>
+        </div>
+        <div class="flex gap-4">
+          <button type="button" class="btn btn-secondary" style="flex:1;" onclick="closeCreateModal()">ABORT</button>
+          <button type="submit" class="btn btn-primary" style="flex:1;">COMMENCE</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
-async function revokeAccess(tourId, userId) {
-  const out = await api(`/tours/${tourId}/access/${userId}`, { method: 'DELETE' });
-  if (!out) return;
-  if (!out.res.ok) {
-    alert(out.data.error || 'Failed to revoke access');
-    return;
-  }
-  renderAccessList(tourId, out.data.items || []);
-}
+  <script src="/js/api.js"></script>
+  <script>
+    let currentPlan = null;
 
-async function finalize(id) {
-  const out = await api(`/tours/${id}/finalize`, { method: 'POST' });
-  if (!out) return;
-  alert(out.res.ok ? `Share URL: ${out.data.share_url}` : (out.data.error || 'Finalize failed'));
-  if (out.res.ok) await loadTours();
-}
+    async function init() {
+      const out = await apiFetch('/me');
+      if (!out || !out.res.ok) return;
+      
+      const u = out.data;
+      document.getElementById('user-name').textContent = u.display_name?.toUpperCase() || 'UNKNOWN';
+      
+      const plan = u.plan || {};
+      const ent = u.entitlements || {};
+      const usage = u.usage || {};
+      currentPlan = plan.id;
+      
+      document.getElementById('plan-badge').textContent = plan.name?.toUpperCase();
+      document.getElementById('plan-usage').textContent = `QUOTA: ${usage.tours_count}/${ent.max_tours}`;
+      
+      const ratio = ent.max_tours > 0 ? (usage.tours_count / ent.max_tours) * 100 : 0;
+      document.getElementById('plan-progress').style.width = `${Math.min(100, ratio)}%`;
 
-function openShare(slug) {
-  window.open(`/t/${slug}`, '_blank');
-}
+      loadTours();
+    }
 
-function openStudio(id) {
-  window.location.href = `/?tour_id=${encodeURIComponent(id)}`;
-}
+    async function loadTours() {
+      const grid = document.getElementById('tours-grid');
+      grid.innerHTML = '<div class="muted mono">Syncing...</div>';
 
-async function removeTour(id) {
-  const out = await api(`/tours/${id}`, { method: 'DELETE' });
-  if (!out) return;
-  if (!out.res.ok) alert(out.data.error || 'Delete failed');
-  await loadTours();
-}
+      const out = await apiFetch('/tours/my');
+      if (!out || !out.res.ok) return;
 
-async function logout() {
-  await api('/auth/logout', { method: 'POST' });
-  location.href = '/login';
-}
+      const tours = out.data.tours || [];
+      if (tours.length === 0) {
+        grid.innerHTML = '<div class="card" style="grid-column: 1/-1; padding: 80px; text-align: center; border-style: dashed; color: var(--text-muted); font-family: var(--font-mono);">EMPTY_LIBRARY: NO TOURS FOUND.</div>';
+        return;
+      }
 
-async function initPage() {
-  await loadMe();
-  await loadTours();
-}
-initPage();
-</script>
+      grid.innerHTML = '';
+      tours.forEach(t => {
+        const card = document.createElement('div');
+        card.className = 'tour-card';
+        
+        const visibility = t.visibility === 'private' ? '[PRIVATE]' : '[PUBLIC]';
+        const badgeClass = t.visibility === 'private' ? 'badge-warning' : 'badge-success';
+
+        card.innerHTML = `
+          <div class="tour-thumb" style="background-image: url('${t.cover_image || '/img/placeholder.png'}')">
+            <div style="position: absolute; top: 12px; right: 12px;">
+              <span class="badge ${badgeClass}">${visibility}</span>
+            </div>
+          </div>
+          <div class="tour-content">
+            <h3 class="mb-2" style="font-size: 14px;">${t.title}</h3>
+            <p class="muted mono" style="font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 12px;">
+              ${t.description || 'NO_DESCRIPTION'}
+            </p>
+            <div class="tour-actions">
+              <button class="btn btn-primary btn-sm" onclick="openStudio('${t.id}')">STUDIO</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.open('/t/${t.slug}', '_blank')">VIEW</button>
+            </div>
+          </div>
+          <div class="tour-footer">
+            <span class="mono" style="font-size: 10px; color: var(--text-muted); opacity: 0.5;">ID: ${t.slug.slice(0,8)}</span>
+            <button class="btn btn-ghost btn-sm" style="color: var(--danger); border: 0; padding: 0;" onclick="deleteTour('${t.id}')">[DELETE]</button>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function showCreateModal() { document.getElementById('create-modal').style.display = 'flex'; }
+    function closeCreateModal() { document.getElementById('create-modal').style.display = 'none'; }
+
+    async function handleCreateTour(e) {
+      e.preventDefault();
+      const payload = {
+        title: document.getElementById('title').value.trim(),
+        description: document.getElementById('description').value.trim(),
+        visibility: document.getElementById('visibility').value
+      };
+      const out = await apiFetch('/tours', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (out && out.res.ok) {
+        showToast('TOUR_INITIALIZED');
+        closeCreateModal();
+        init();
+      }
+    }
+
+    async function deleteTour(id) {
+      if (!confirm('CONFIRM_PURGE?')) return;
+      const out = await apiFetch(`/tours/${id}`, { method: 'DELETE' });
+      if (out && out.res.ok) {
+        showToast('PURGE_COMPLETE');
+        loadTours();
+      }
+    }
+
+    function openStudio(id) { window.location.href = `/?tour_id=${encodeURIComponent(id)}`; }
+
+    init();
+  </script>
 </body>
 </html>

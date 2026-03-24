@@ -3,342 +3,166 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Pan-o-Rama Pro - Studio</title>
+    <title>Studio - Lokalny Obiektyw</title>
+    <link rel="stylesheet" href="/css/main.css?v=4" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        html { height: 100%; }
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            margin: 0;
-            background: #1a1a1a;
-            color: #eee;
-            min-height: 100vh;
-            min-height: 100svh;
-            min-height: 100dvh;
-            display: flex;
-            flex-direction: column;
-            overscroll-behavior: none;
+        body { flex-direction: row; }
+        .sidebar {
+            width: 340px; min-width: 340px; height: 100vh;
+            border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; padding: 0; background: #050505;
         }
-        .app-header { background: #2a2a2a; padding: calc(10px + env(safe-area-inset-top, 0px)) 20px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #444; gap: 12px; }
-        .logo-small { height: 40px; }
-        .main-container { display: flex; flex: 1; min-height: 0; overflow: hidden; align-items: stretch; }
-        .sidebar { width: 300px; background: #222; border-right: 1px solid #444; padding: 20px; display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow-y: auto; box-sizing: border-box; align-self: stretch; }
-        .viewer-container { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; background: #000; align-self: stretch; display: flex; }
-        #pano-editor { width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; }
-        .mobile-studio-nav { display: none; }
-        .mobile-studio-nav .nav-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-        .mobile-studio-nav .btn { padding: 9px 8px; font-size: 0.84rem; }
-        .mobile-studio-nav .btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
-        .step { display: none; }
-        .step.active { display: flex; flex-direction: column; overflow: hidden; }
-        #step2.step.active, #step3.step.active {
-            min-height: 0;
-            overflow-y: auto;
-            padding-right: 2px;
+        .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
+        .sidebar-tab {
+            flex: 1; padding: 14px; text-align: center; font-family: var(--font-mono);
+            font-size: 11px; font-weight: 700; cursor: pointer; color: var(--text-muted);
+            border-bottom: 2px solid transparent; transition: 0.2s;
         }
-        #step1-workspace.step.active {
-            display: block;
-            overflow-y: auto;
-            height: 100%;
+        .sidebar-tab:hover { color: var(--text); }
+        .sidebar-tab.active {
+            color: var(--primary); border-bottom-color: var(--primary);
+            background: rgba(245, 158, 11, 0.05);
         }
-        .btn { padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; text-align: center; text-decoration: none; }
-        .btn-primary { background: #007bff; color: white; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-ghost { background: transparent; border: 1px solid #555; color: #ccc; }
-        .btn-sm { padding: 6px 8px; border-radius: 6px; font-size: 0.85rem; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .scene-item { background: #333; padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; cursor: pointer; border: 2px solid transparent; }
-        .scene-item.active { border-color: #007bff; background: #3d3d3d; }
-        .scene-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
-        .badge { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; line-height: 1.4; vertical-align: middle; border: 1px solid rgba(255,255,255,0.12); }
-        .badge-warn { background: rgba(255,193,7,0.14); color: #ffdb79; border-color: rgba(255,193,7,0.25); }
-        .badge-ok { background: rgba(40,167,69,0.18); color: #8cffb3; border-color: rgba(40,167,69,0.35); }
-        .scene-actions { display: flex; gap: 8px; align-items: center; }
-        input, select { padding: 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; width: 100%; box-sizing: border-box; }
-        .hud { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; pointer-events: none; }
-        .hud.interactive { pointer-events: auto; }
-        .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 1000; flex-direction: column; }
-        .loading-progress { width: min(520px, 78vw); margin-top: 14px; }
-        .loading-progress .bar { height: 10px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; overflow: hidden; }
-        .loading-progress .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #4da3ff, #0d6efd); transition: width 160ms ease; }
-        .loading-progress .pct { margin-top: 8px; font-size: 0.95rem; color: #bcd7ff; text-align: center; }
-        
-        /* Portal Styles (shared with viewer) */
-        .custom-hotspot { 
-            height: 30px; width: 30px; 
-            background: rgba(0, 123, 255, 0.4); 
-            border: 2px solid #fff; 
-            border-radius: 50%; 
-            cursor: pointer; 
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
-            display: flex; align-items: center; justify-content: center;
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+        .main-stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .viewer-container { flex: 1; position: relative; background: #000; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .scene-item {
+            background: #0a0a0a; border: 1px solid var(--border);
+            padding: 10px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
         }
-        .custom-hotspot::after {
-            content: ''; width: 8px; height: 8px;
-            border-top: 3px solid #fff; border-right: 3px solid #fff;
-            transform: rotate(-45deg) translate(-1px, 1px);
+        .scene-item.active { border-color: var(--primary); box-shadow: inset 0 0 10px rgba(245, 158, 11, 0.1); }
+        .empty-state {
+            padding: 40px 20px; text-align: center; border: 1px dashed var(--border);
+            color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;
         }
         .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
-
-        /* Center Logo for Step 1 */
-        .center-logo-container {
-            min-height: 100%;
-            padding: 20px 24px 30px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-start;
-            box-sizing: border-box;
+        .pnlm-control-bar { background: rgba(0,0,0,0.8) !important; border: 1px solid var(--border) !important; }
+        
+        /* Silent Progress Bar at top of viewer */
+        #top-progress {
+            position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+            background: transparent; z-index: 1000; display: none;
         }
-        .logo-giant { max-height: min(42vh, 360px); width: auto; filter: drop-shadow(0 0 20px rgba(0,123,255,0.2)); margin-bottom: 12px; animation: pulse 4s infinite ease-in-out; }
-        .shooting-guide {
-            margin-top: 14px;
-            max-width: 760px;
-            width: 100%;
-            background: rgba(20, 20, 20, 0.78);
-            border: 1px solid #2f2f2f;
-            border-radius: 12px;
-            padding: 18px 20px;
-            box-sizing: border-box;
-        }
-        .shooting-guide h3 {
-            margin: 0 0 10px;
-            color: #4da3ff;
-            font-size: 1.15rem;
-        }
-        .shooting-guide ul {
-            margin: 0;
-            padding-left: 20px;
-            color: #cfd5db;
-            line-height: 1.45;
-        }
-        .shooting-guide li { margin-bottom: 8px; }
-        .shooting-guide li:last-child { margin-bottom: 0; }
-        @media (max-width: 1024px) {
-            .sidebar { width: 270px; padding: 14px; }
-            .btn { padding: 10px; font-size: 0.95rem; }
-            .app-header { padding: 8px 12px; }
-        }
-        @media (max-width: 860px) {
-            body { overflow: hidden; }
-            .app-header { flex-wrap: wrap; gap: 10px; padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px; }
-            .app-header h2 { font-size: 1rem; }
-            .logo-small { height: 32px; }
-            .main-container {
-                flex: 1;
-                flex-direction: column;
-                min-height: 0;
-                overflow: hidden;
-            }
-            .sidebar {
-                width: 100%;
-                max-height: min(34vh, 320px);
-                border-right: 0;
-                border-bottom: 1px solid #444;
-                padding: 8px 10px;
-                gap: 8px;
-                overflow-y: auto;
-                flex-shrink: 0;
-            }
-            #project-scenes {
-                flex: 0 0 auto !important;
-                display: block;
-            }
-            #scenesList {
-                flex: 0 0 auto !important;
-                max-height: 24vh;
-                min-height: 96px !important;
-                margin-bottom: 10px !important;
-            }
-            #step2.step.active, #step3.step.active {
-                display: block;
-                overflow: visible;
-            }
-            .mobile-studio-nav {
-                display: block;
-                position: sticky;
-                top: 0;
-                z-index: 3;
-                background: #222;
-                padding-bottom: 8px;
-            }
-            #step1 h3 { margin: 0 0 4px; font-size: 1rem; }
-            #step1 p { margin: 0 0 8px; font-size: 0.88rem; line-height: 1.25; }
-            #step1 .btn { padding: 9px 10px; font-size: 0.9rem; }
-            .viewer-container {
-                flex: 1 1 auto;
-                min-height: 0;
-                height: auto;
-                padding-bottom: env(safe-area-inset-bottom, 0px);
-            }
-            .hud { top: 10px; right: 10px; font-size: 0.85rem; padding: 10px; }
-            .center-logo-container { padding: 16px 14px 20px; }
-            .logo-giant { max-height: min(25vh, 170px); }
-            .shooting-guide {
-                margin-top: 10px;
-                padding: 14px;
-                border-radius: 10px;
-            }
-            .shooting-guide h3 { font-size: 1rem; }
-            .shooting-guide ul { font-size: 0.9rem; line-height: 1.35; }
-        }
-        @media (max-width: 520px) {
-            .app-header > div:last-child {
-                width: 100%;
-                display: grid !important;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
-                gap: 8px !important;
-            }
-            .app-header > div:last-child .btn {
-                padding: 8px 6px;
-                font-size: 0.8rem;
-            }
-            .sidebar { max-height: min(38vh, 300px); padding: 7px 8px; }
-            #scenesList { max-height: 22vh; }
-            #step1 h3 { font-size: 0.95rem; margin-bottom: 3px; }
-            #step1 p { font-size: 0.82rem; margin-bottom: 6px; }
-            #step1 .btn { padding: 8px 8px; font-size: 0.84rem; }
-            .logo-giant { max-height: min(20vh, 120px); }
-            .shooting-guide { padding: 12px; }
-            .shooting-guide ul { padding-left: 18px; font-size: 0.84rem; }
-            .sidebar h3, .sidebar h4 { margin: 0 0 8px; }
-            .scene-item { padding: 8px; font-size: 0.9rem; }
-            .hud { left: 10px; right: auto; max-width: calc(100vw - 20px); }
-            .mobile-studio-nav .btn { padding: 8px 6px; font-size: 0.78rem; }
-        }
-        @media (max-height: 760px) {
-            .logo-giant { max-height: min(32vh, 240px); }
-        }
-        @supports (-webkit-touch-callout: none) {
-            html { height: -webkit-fill-available; }
-            body { min-height: -webkit-fill-available; }
-        }
-        @keyframes pulse { 0% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.02); opacity: 1; } 100% { transform: scale(1); opacity: 0.9; } }
+        #top-progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
     </style>
 </head>
 <body>
-    <div class="app-header">
-        <div style="display:flex; align-items:center; gap:15px;">
-            <img src="/img/logo.png" class="logo-small" alt="Logo">
-            <h2 style="margin:0; color:#007bff;">Pan-o-Rama Pro Studio</h2>
+    <aside class="sidebar">
+        <div class="sidebar-tabs">
+            <div class="sidebar-tab active" onclick="switchTab('scenes')">SCENES</div>
+            <div class="sidebar-tab" onclick="switchTab('tour')">TOUR</div>
+            <div class="sidebar-tab" onclick="switchTab('sharing')">SHARING</div>
         </div>
-        <div style="display:flex; gap:10px;">
-            <a href="/dashboard" class="btn btn-ghost">Dashboard</a>
-            <a href="/login" class="btn btn-ghost">Login</a>
-            <a href="/projects.html" class="btn btn-ghost">Browse Tours</a>
-        </div>
-    </div>
 
-    <div class="main-container">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div id="project-scenes" style="display:none; flex-direction: column; flex: 1; min-height: 0;">
-                <div class="mobile-studio-nav">
-                    <div class="nav-row">
-                        <button class="btn btn-ghost" id="mobileScenesBtn" type="button" onclick="focusScenesList()">Scenes</button>
-                        <button class="btn btn-ghost" id="mobileAddBtn" type="button" onclick="showStep(2)">Add</button>
-                        <button class="btn btn-ghost" id="mobileLinkBtn" type="button" onclick="startLinking()">Link</button>
-                    </div>
+        <div class="sidebar-content">
+            <div id="panel-scenes" class="tab-panel active">
+                <div class="flex justify-between items-center mb-4">
+                    <h3>Library</h3>
+                    <span class="badge" id="scene-count-badge">0</span>
                 </div>
-                <h3>Scenes</h3>
-                <div id="scenesList" style="flex:1; min-height:140px; overflow-y:auto; margin-bottom: 15px;"></div>
-                <hr style="border-color:#444; margin:15px 0;">
-                
-                <!-- Step 2 content: Add Scene -->
-                <div id="step2" class="step">
-                    <h4>Add Scene</h4>
-                    <input type="text" id="sceneName" placeholder="e.g. Lobby">
-                    <input type="file" id="sceneFiles" multiple accept="image/*" style="margin-top:10px;">
-                    <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+                <div id="scenesList" class="mb-8"></div>
+                <div class="card">
+                    <h4 class="mb-4">Add Scene</h4>
+                    <div class="mb-4">
+                        <label class="block mb-1">Name</label>
+                        <input type="text" id="sceneName" placeholder="ROOM_01">
+                    </div>
+                    <div class="mb-4">
+                        <label class="block mb-1">File</label>
+                        <input type="file" id="sceneFiles" multiple accept="image/*">
+                    </div>
+                    <div class="mb-4 flex items-center gap-2">
                         <input type="checkbox" id="isPano" style="width:auto;" checked>
-                        <label for="isPano">This is a 360° Panorama</label>
+                        <label for="isPano">360° Panorama</label>
                     </div>
-                    <button class="btn btn-success" style="margin-top:10px; width:100%;" id="addBtn" onclick="addScene()">Process Scene</button>
-                    <button class="btn btn-primary" id="gotoStep3" style="display:none; margin-top:15px;" onclick="startLinking()">Link Scenes &rarr;</button>
-                </div>
-
-                <!-- Step 3 content: Linking -->
-                <div id="step3" class="step">
-                    <h3>Linking Lab</h3>
-                    <p>Click on the panorama to place a portal.</p>
-                    <div id="linkingStatus" style="font-size:0.9em; color:#aaa; margin-bottom:15px;">Selected: None</div>
-                    
-                    <div id="portalForm" style="display:none; background:#333; padding:15px; border-radius:8px;">
-                        <label>Leads to:</label>
-                        <select id="targetScene" style="margin-bottom:10px;"></select>
-                        <button class="btn btn-primary" style="width:100%;" onclick="savePortal()">Save Portal</button>
-                    </div>
-
-                    <div id="incomingForm" style="margin-top:12px; background:#333; padding:15px; border-radius:8px;">
-                        <label>Incoming links to this scene:</label>
-                        <select id="incomingLinkSelect" style="margin:8px 0 10px;"></select>
-                        <button class="btn btn-ghost" type="button" style="width:100%;" onclick="storePosForIncomingLink()">Store Pos. for Link</button>
-                    </div>
-
-                    <div style="margin-top:auto;">
-                        <button class="btn btn-ghost" id="setStartBtn" type="button" style="width:100%; margin-bottom: 8px;" onclick="setCurrentSceneAsStart()">Set as start</button>
-                        <button class="btn btn-success" style="width:100%;" onclick="finalizeTour()">Finish & Publish</button>
-                        <div style="margin-top:12px; background:#2b2b2b; border:1px solid #444; padding:12px; border-radius:10px;">
-                            <div style="font-weight:700; color:#cfe6ff; margin-bottom:6px;">Share to Facebook (Hybrid)</div>
-                            <div style="font-size:0.92em; color:#b5b5b5; line-height:1.35; margin-bottom:10px;">
-                                Download a 360 photo of the first scene, upload it to Facebook, and paste your full tour link in the post text.
-                            </div>
-                            <button class="btn btn-primary" style="width:100%;" type="button" onclick="downloadFacebook360FirstScene()">Download FB 360 (First Scene)</button>
-                            <button class="btn btn-ghost" style="width:100%; margin-top:8px;" type="button" onclick="copyFullTourShareLink()">Copy Full Tour Link</button>
-                        </div>
-                        <button class="btn btn-ghost" id="exportSelfHostedBtn" style="width:100%; margin-top:10px;" type="button" onclick="exportSelfHostedPackage()">Export Self-Hosted Package</button>
-                        <button class="btn btn-primary" id="upgradeBusinessBtn" style="display:none; width:100%; margin-top:8px;" type="button" onclick="window.location.href='/account'">Upgrade to Business Plan</button>
-                        <button class="btn btn-ghost" style="width:100%; margin-top:10px;" onclick="showStep(2)">Add More Scenes</button>
-                    </div>
+                    <button class="btn btn-primary" style="width:100%;" id="addBtn" onclick="addScene()">Process & Add</button>
                 </div>
             </div>
 
-            <!-- Step 1: Init -->
-            <div id="step1" class="step active">
-                <h3>New Project</h3>
-                <p>Start a professional virtual tour.</p>
-                <button class="btn btn-primary" onclick="createProject()">Initialize Studio &rarr;</button>
+            <div id="panel-tour" class="tab-panel">
+                <div id="tour-empty-state" class="empty-state">
+                    NO SCENES DETECTED.<br>UPLOAD SCENES TO CONFIGURE.
+                </div>
+                <div id="tour-controls" style="display:none;">
+                    <h3 class="mb-4">Connectivity</h3>
+                    <button class="btn mb-4" style="width:100%;" onclick="startLinking()">Enter Linking Mode</button>
+                    <div id="portalForm" style="display:none;" class="card mb-4">
+                        <label class="block mb-2">Target Destination</label>
+                        <select id="targetScene" class="mb-4"></select>
+                        <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Establish Link</button>
+                    </div>
+                    <div class="card mb-4">
+                        <label class="block mb-2">Inbound Links</label>
+                        <select id="incomingLinkSelect" class="mb-4"></select>
+                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Set Entry Angle</button>
+                    </div>
+                    <h3 class="mt-8 mb-4">Configuration</h3>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set as Home View</button>
+                </div>
+            </div>
+
+            <div id="panel-sharing" class="tab-panel">
+                <h3 class="mb-4">Distribution</h3>
+                <div class="card mb-4">
+                    <label class="block mb-2">Visibility</label>
+                    <select id="tourVisibility" class="mb-4">
+                        <option value="public">Public</option>
+                        <option value="private">Private</option>
+                    </select>
+                    <button class="btn btn-primary" style="width:100%;" onclick="finalizeTour()">Publish to Cloud</button>
+                </div>
+                <div class="card mb-4">
+                    <h4 class="mb-2">External Assets</h4>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="downloadFacebook360FirstScene()">Export Facebook 360</button>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" id="exportSelfHostedBtn" onclick="exportSelfHostedPackage()">Export Self-Hosted ZIP</button>
+                    <button class="btn btn-primary btn-sm mt-2" id="upgradeBusinessBtn" style="display:none; width:100%;" onclick="window.location.href='/account'">Upgrade for Exports</button>
+                </div>
+                <div class="card">
+                    <label class="block mb-2">Short Link</label>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="copyFullTourShareLink()">Copy URL to Clipboard</button>
+                </div>
             </div>
         </div>
 
-        <!-- Viewer / Workspace -->
-        <div class="viewer-container">
-            <div id="step1-workspace" class="step active">
-                <div class="center-logo-container">
-                    <img src="/img/logo.png" class="logo-giant" alt="Pan-o-Rama Logo large">
-                    <div class="shooting-guide">
-                        <h3>How to shoot better panoramas</h3>
-                        <ul>
-                            <li>Lock exposure and white balance before starting the shot sequence.</li>
-                            <li>Stand in one point and rotate the phone around itself, as if on a tripod.</li>
-                            <li>Do not walk while shooting. Even small movement breaks stitching.</li>
-                            <li>Keep overlap between frames around 30-40% so the stitcher can match details.</li>
-                            <li>Hold the horizon level and keep camera height consistent for all frames.</li>
-                            <li>Avoid moving objects close to camera (people, pets, doors) during capture.</li>
-                            <li>Use slow, steady rotation and finish a full 360° circle before stopping.</li>
-                        </ul>
-                    </div>
+        <div id="step1" style="padding: 24px; border-top: 1px solid var(--border);">
+            <button class="btn btn-primary" style="width: 100%;" onclick="createProject()">New Project</button>
+        </div>
+    </aside>
+
+    <div class="main-stage">
+        <header class="header">
+            <div class="logo">
+                <img src="/img/logo.png" alt="LO" />
+                <span>TOUR_STUDIO_v3</span>
+            </div>
+            <nav class="nav-links">
+                <a href="/dashboard.html" class="nav-link">Dashboard</a>
+                <a href="/projects.html" class="nav-link">Gallery</a>
+                <a href="/account.html" class="nav-link">Account</a>
+                <button class="btn btn-ghost btn-sm" style="opacity: 0.6;" onclick="logout()">Logout</button>
+            </nav>
+        </header>
+
+        <main class="viewer-container">
+            <div id="top-progress"><div id="top-progress-fill"></div></div>
+            <div id="step1-workspace" style="display: flex; align-items:center; justify-content: center; height: 100%; background: #050505;">
+                <div style="text-align: center; max-width: 500px;">
+                    <h2 class="mb-4" style="color: var(--primary);">Ready for Input</h2>
+                    <p class="muted mono" style="font-size: 12px;">Initialize a project or select a tour from the dashboard to begin operational sequence.</p>
                 </div>
             </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
-            <div class="hud" id="editorHud" style="display:none;">
-                <div id="coords">Pitch: 0 | Yaw: 0</div>
-                <div style="color:#007bff; font-weight:bold; margin-top:5px;">EDITOR MODE ACTIVE</div>
+            <div class="hud card" id="editorHud" style="display:none; pointer-events: none; position: absolute; top: 20px; right: 20px;">
+                <div id="coords" style="font-family: var(--font-mono); font-size: 11px; color: var(--primary);">P: 0.00 | Y: 0.00</div>
             </div>
-        </div>
+        </main>
     </div>
 
-    <div class="loading-overlay" id="loader">
-        <div style="font-size:2em; margin-bottom:10px;">⚙️</div>
-        <div id="loaderText">Processing Assets...</div>
-        <div class="loading-progress" id="loaderProgress" style="display:none;">
-            <div class="bar"><div class="fill" id="loaderBar"></div></div>
-            <div class="pct" id="loaderPct">0%</div>
-        </div>
-    </div>
-
+    <script src="/js/api.js"></script>
     <script>
         let projectId = null;
         let scenes = [];
@@ -347,930 +171,203 @@
         let viewer = null;
         let currentPlanId = null;
         let lastClickCoords = null;
-        const prefetchCache = new Set();
-        const jobPollers = new Map(); // job_id -> true
-        let sceneLoadTimer = null;
-        let sceneLoadPct = 0;
-        let addSceneBusy = false;
-        let addSceneCooldownUntil = 0;
+        const jobPollers = new Map();
 
         function getTourIdFromQuery() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('tour_id');
+            return new URLSearchParams(window.location.search).get('tour_id');
         }
 
-        async function apiFetch(url, options = {}) {
-            const res = await fetch(url, options);
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return null;
-            }
-            return res;
+        function switchTab(tabId) {
+            document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`.sidebar-tab[onclick*="${tabId}"]`).classList.add('active');
+            document.getElementById(`panel-${tabId}`).classList.add('active');
         }
 
         function refreshPlanGatedActions() {
-            const exportBtn = document.getElementById('exportSelfHostedBtn');
-            const upgradeBtn = document.getElementById('upgradeBusinessBtn');
-            if (!exportBtn) return;
             const isBusiness = currentPlanId === 'business';
-            exportBtn.disabled = !isBusiness;
-            exportBtn.title = isBusiness ? '' : 'Business plan required';
-            if (upgradeBtn) upgradeBtn.style.display = isBusiness ? 'none' : 'block';
+            if (document.getElementById('exportSelfHostedBtn')) document.getElementById('exportSelfHostedBtn').style.display = isBusiness ? 'block' : 'none';
+            if (document.getElementById('upgradeBusinessBtn')) document.getElementById('upgradeBusinessBtn').style.display = isBusiness ? 'none' : 'block';
         }
 
         async function loadCurrentUser() {
-            const res = await apiFetch('/me', { method: 'GET' });
-            if (!res || !res.ok) return;
-            const me = await res.json();
-            currentPlanId = (me && me.plan && me.plan.id) ? String(me.plan.id) : null;
-            refreshPlanGatedActions();
+            const out = await apiFetch('/me');
+            if (out && out.res.ok) {
+                currentPlanId = String(out.data.plan?.id);
+                refreshPlanGatedActions();
+            }
         }
 
         async function loadExistingTour(tourId) {
-            setLoading(true, "Loading tour...");
-            try {
-                const res = await apiFetch(`/tours/${tourId}`);
-                if (!res) return;
-                const data = await res.json();
-                if (!res.ok || !data.tour) {
-                    alert(data.error || 'Failed to load tour');
-                    return;
-                }
-                projectId = data.tour.id;
-                scenes = data.tour.scenes || [];
-                tourSettings = {
-                    start_scene_id: data.tour.start_scene_id || null,
-                    start_pitch: Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : null,
-                    start_yaw: Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : null,
-                    default_hfov: Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : 70
-                };
-                showStep(2);
+            setLoading(true, "Synchronizing...");
+            const out = await apiFetch(`/tours/${tourId}`);
+            if (out && out.res.ok) {
+                projectId = out.data.tour.id;
+                scenes = out.data.tour.scenes || [];
+                tourSettings = { start_scene_id: out.data.tour.start_scene_id, start_pitch: out.data.tour.start_pitch, start_yaw: out.data.tour.start_yaw, default_hfov: out.data.tour.default_hfov || 70 };
+                if (document.getElementById('tourVisibility')) document.getElementById('tourVisibility').value = out.data.tour.visibility || 'public';
+                document.getElementById('step1').style.display = 'none';
                 updateScenesUI();
-                document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
-                if (scenes.length > 0) {
-                    const startId = (tourSettings.start_scene_id && scenes.some(s => s.id === tourSettings.start_scene_id))
-                        ? tourSettings.start_scene_id
-                        : scenes[0].id;
-                    loadScene(startId);
-                }
-            } finally {
-                setLoading(false);
+                if (scenes.length > 0) loadScene(tourSettings.start_scene_id && scenes.some(s => s.id === tourSettings.start_scene_id) ? tourSettings.start_scene_id : scenes[0].id);
             }
+            setLoading(false);
         }
 
         async function createProject() {
-            setLoading(true, "Initializing...");
-            try {
-                const res = await apiFetch('/tours', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: 'Untitled Tour', visibility: 'public' })
-                });
-                if (!res) return;
-                const data = await res.json();
-                if (!res.ok || !data.tour) {
-                    alert(data.error || 'Failed to create tour');
-                    return;
-                }
-                projectId = data.tour.id;
-                const url = new URL(window.location.href);
-                url.searchParams.set('tour_id', projectId);
-                window.history.replaceState({}, '', url.toString());
-                showStep(2);
-            } finally { setLoading(false); }
+            setLoading(true);
+            const out = await apiFetch('/tours', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'NEW_TOUR', visibility: 'public' }) });
+            if (out && out.res.ok) {
+                projectId = out.data.tour.id;
+                window.history.replaceState({}, '', `/?tour_id=${projectId}`);
+                document.getElementById('step1').style.display = 'none';
+                switchTab('scenes');
+            }
+            setLoading(false);
         }
 
         async function addScene() {
-            const now = Date.now();
-            if (addSceneBusy || now < addSceneCooldownUntil) return;
             const name = document.getElementById('sceneName').value;
             const files = document.getElementById('sceneFiles').files;
-            const isPano = document.getElementById('isPano').checked;
-            if (!projectId) return alert("Create or open a tour first.");
-            if (!name || files.length === 0) return alert("Fill all fields");
-            addSceneBusy = true;
-            addSceneCooldownUntil = now + 1600;
-            const addBtn = document.getElementById('addBtn');
-            if (addBtn) addBtn.disabled = true;
-
+            if (!projectId || !name || files.length === 0) return showToast("Missing Data", "error");
+            
             const formData = new FormData();
             formData.append('scene_name', name);
-            formData.append('is_panorama', isPano ? 'true' : 'false');
+            formData.append('is_panorama', document.getElementById('isPano').checked ? 'true' : 'false');
             for (let f of files) formData.append('files[]', f);
 
             setLoading(true, "Uploading...");
-            try {
-                const res = await apiFetch(`/tours/${projectId}/scenes?async=1`, { method: 'POST', body: formData });
-                if (!res) return;
-                const text = await res.text();
-                let data = {};
-                try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
-                if (!res.ok || data.error) {
-                    const msg = data.error || (text ? text.slice(0, 400) : 'Unknown error');
-                    alert("Error processing scene: " + msg);
-                    return;
-                }
-                if (data.scene) scenes.push(data.scene);
+            const out = await apiFetch(`/tours/${projectId}/scenes?async=1`, { method: 'POST', body: formData });
+            if (out && out.res.ok) {
+                if (out.data.scene) scenes.push(out.data.scene);
                 updateScenesUI();
-                document.getElementById('gotoStep3').style.display = 'block';
-                document.getElementById('sceneName').value = '';
-                document.getElementById('sceneFiles').value = '';
-
-                // Async mode: queue job and keep UI responsive while processing.
-                if (data.job_id) {
-                    const s = scenes.find(x => x.id === (data.scene && data.scene.id));
-                    if (s) {
-                        s.job_id = data.job_id;
-                        s.processing_status = s.processing_status || 'queued';
-                        s._job_progress_pct = 0;
-                    }
-                    setLoading(false);
-                    pollJobUntilTerminal(data.job_id, { refreshTourOnDone: true });
-                    if (data.scene && data.scene.id) pollSceneReadyFallback(data.scene.id);
-                    return;
-                }
-
-                // Fallback: sync response.
-                if (!activeSceneId && data.scene) loadScene(data.scene.id);
-            } catch (e) {
-                alert("Network error or server crash. Check logs.");
-            } finally {
-                // In async mode we already hid the loader after upload.
-                if (document.getElementById('loader').style.display !== 'none') setLoading(false);
-                setTimeout(() => {
-                    addSceneBusy = false;
-                    const btn = document.getElementById('addBtn');
-                    if (btn) btn.disabled = false;
-                }, 1200);
+                if (out.data.job_id) pollJobUntilTerminal(out.data.job_id, { refreshTourOnDone: true });
             }
+            setLoading(false);
         }
 
-        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-        function isSceneReady(scene) {
-            if (!scene) return false;
-            const status = String(scene.processing_status || '').toLowerCase();
-            return !status || status === 'ready' || status === 'done';
-        }
-
-        async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false, showLoader = false } = {}) {
-            if (!jobId || jobPollers.has(jobId)) return;
+        async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false } = {}) {
+            if (jobPollers.has(jobId)) return;
             jobPollers.set(jobId, true);
-
             let done = false;
-            try {
-                while (!done) {
-                    const res = await apiFetch(`/jobs/${jobId}`);
-                    if (!res) return;
-                    const data = await res.json();
-                    const job = data && data.job ? data.job : null;
-                    if (!job) throw new Error('Missing job payload');
-
-                    if (job.scene_id) {
-                        const s = scenes.find(x => x.id === job.scene_id);
-                        if (s) {
-                            s.job_id = job.id;
-                            s.processing_status = job.status === 'done' ? 'ready' : job.status;
-                            s._job_progress_pct = Number(job.progress_pct || 0);
-                        }
-                        updateScenesUI();
-                    }
-
-                    if (showLoader) {
-                        setLoading(true, job.message || 'Processing...');
-                        setLoadingProgress(Number(job.progress_pct || 0));
-                    }
-
-                    if (job.status === 'done') {
-                        done = true;
-                        if (refreshTourOnDone) await refreshTour();
-                        break;
-                    }
-                    if (job.status === 'failed') {
-                        done = true;
-                        const err = job.error || job.message || 'Job failed';
-                        alert(err);
-                        break;
-                    }
-
-                    await sleep(900);
+            while (!done) {
+                const out = await apiFetch(`/jobs/${jobId}`);
+                if (!out) break;
+                const job = out.data.job;
+                if (job.scene_id) {
+                    const s = scenes.find(x => x.id === job.scene_id);
+                    if (s) { s.processing_status = job.status === 'done' ? 'ready' : job.status; }
+                    updateScenesUI();
                 }
-            } finally {
-                jobPollers.delete(jobId);
-                if (showLoader) setLoading(false);
+                if (job.status === 'done' || job.status === 'failed') {
+                    done = true;
+                    if (refreshTourOnDone) await refreshTour();
+                } else { await new Promise(r => setTimeout(r, 2000)); }
             }
+            jobPollers.delete(jobId);
         }
 
         async function refreshTour() {
-            if (!projectId) return;
-            const res = await apiFetch(`/tours/${projectId}`, { method: 'GET' });
-            if (!res) return;
-            const data = await res.json();
-            if (!res.ok || !data.tour) return;
-            scenes = data.tour.scenes || [];
-            tourSettings = {
-                start_scene_id: data.tour.start_scene_id || null,
-                start_pitch: Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : null,
-                start_yaw: Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : null,
-                default_hfov: Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : 70
-            };
-            ensurePendingJobPollers();
-            updateScenesUI();
-            document.getElementById('gotoStep3').style.display = scenes.length > 0 ? 'block' : 'none';
-        }
-
-        async function pollSceneReadyFallback(sceneId, attempts = 45) {
-            if (!sceneId || !projectId) return;
-            for (let i = 0; i < attempts; i++) {
-                await sleep(1200);
-                await refreshTour();
-                const scene = scenes.find(s => s.id === sceneId);
-                if (isSceneReady(scene)) return;
-            }
-        }
-
-        function getReadyScenes() {
-            return scenes.filter(s => isSceneReady(s) && (s.web || s.panorama));
-        }
-
-        function getPendingScenes() {
-            return scenes.filter(s => s.processing_status && s.processing_status !== 'ready');
-        }
-
-        function ensurePendingJobPollers() {
-            for (const s of scenes) {
-                if (s && s.job_id && s.processing_status && s.processing_status !== 'ready') {
-                    pollJobUntilTerminal(s.job_id, { refreshTourOnDone: true, showLoader: false });
-                }
-            }
+            const out = await apiFetch(`/tours/${projectId}`);
+            if (out && out.res.ok) { scenes = out.data.tour.scenes || []; updateScenesUI(); }
         }
 
         function updateScenesUI() {
             const list = document.getElementById('scenesList');
-            if (!list) return;
-            list.innerHTML = '';
-            scenes.forEach(s => {
-                const status = (!isSceneReady(s) && s.processing_status) ? String(s.processing_status) : '';
-                const pct = (typeof s._job_progress_pct === 'number') ? Math.max(0, Math.min(100, s._job_progress_pct)) : null;
-                const badge = status ? `<span class="badge badge-warn">${status.toUpperCase()}${pct !== null ? (' ' + pct + '%') : ''}</span>` : '';
-                const startBadge = (tourSettings.start_scene_id === s.id) ? `<span class="badge badge-ok">START</span>` : '';
-                const div = document.createElement('div');
-                div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
-                div.innerHTML = `
-                    <span class="scene-title">🏠 ${s.name} ${startBadge} ${badge}</span>
-                    <span class="scene-actions">
-                        <button class="btn btn-danger btn-sm" type="button" data-scene-delete="${s.id}">Delete</button>
-                    </span>
-                `;
-                div.onclick = () => loadScene(s.id);
-                list.appendChild(div);
-            });
-            const linkBtn = document.getElementById('gotoStep3');
-            const mobileLinkBtn = document.getElementById('mobileLinkBtn');
-            if (linkBtn) {
-                const readyCount = getReadyScenes().length;
-                const pendingCount = getPendingScenes().length;
-                linkBtn.disabled = readyCount === 0;
-                linkBtn.title = readyCount === 0
-                    ? (pendingCount > 0 ? `Scenes are still processing (${pendingCount}). Wait until at least one is ready.` : 'Add at least one scene')
-                    : '';
-                if (mobileLinkBtn) {
-                    mobileLinkBtn.disabled = linkBtn.disabled;
-                    mobileLinkBtn.title = linkBtn.title;
-                }
-            }
-            list.querySelectorAll('button[data-scene-delete]').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deleteScene(btn.getAttribute('data-scene-delete'));
+            if (document.getElementById('scene-count-badge')) document.getElementById('scene-count-badge').textContent = scenes.length;
+            if (list) {
+                list.innerHTML = '';
+                scenes.forEach(s => {
+                    const isReady = !s.processing_status || s.processing_status === 'ready';
+                    const div = document.createElement('div');
+                    div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
+                    div.innerHTML = `
+                        <div style="flex:1; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="loadScene('${s.id}')">
+                            <div class="badge ${isReady?'badge-success':'badge-warning'}">${isReady?'OK':'BUSY'}</div>
+                            <span class="mono" style="font-size:11px;">${s.name}</span>
+                        </div>
+                        <button class="btn btn-sm btn-danger" style="padding:2px 6px; border:0;" onclick="deleteScene('${s.id}')">×</button>
+                    `;
+                    list.appendChild(div);
                 });
-            });
-            const setStartBtn = document.getElementById('setStartBtn');
-            if (setStartBtn) {
-                const active = scenes.find(s => s.id === activeSceneId);
-                setStartBtn.disabled = !active || !isSceneReady(active);
-                setStartBtn.title = active ? `Set "${active.name}" as start scene` : 'Open a scene first';
-                setStartBtn.textContent = active ? `Set "${active.name}" as start` : 'Set as start';
             }
-            refreshMobileStudioNav();
-        }
-
-        function showEmptyWorkspace() {
-            if (viewer) {
-                try { viewer.destroy(); } catch (_) {}
-                viewer = null;
-            }
-            activeSceneId = null;
-            document.getElementById('pano-editor').style.display = 'none';
-            document.getElementById('step1-workspace').style.display = 'block';
-            document.getElementById('editorHud').style.display = 'none';
-            refreshIncomingLinksPanel();
-            updateScenesUI();
+            document.getElementById('tour-empty-state').style.display = scenes.length > 0 ? 'none' : 'block';
+            document.getElementById('tour-controls').style.display = scenes.length > 0 ? 'block' : 'none';
         }
 
         async function deleteScene(sceneId) {
-            const scene = scenes.find(s => s.id === sceneId);
-            if (!scene) return;
-            const ok = confirm(`Delete scene "${scene.name}"? This cannot be undone.`);
-            if (!ok) return;
-            if (!projectId) return alert("No active tour.");
-
-            setLoading(true, "Deleting scene...");
-            try {
-                const res = await apiFetch(`/scenes/${encodeURIComponent(sceneId)}`, { method: 'DELETE' });
-                if (!res) return;
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    alert(data.error || 'Failed to delete scene');
-                    return;
-                }
-
-                // Remove the scene and purge hotspots that reference it.
+            if (!confirm('DELETE?')) return;
+            const out = await apiFetch(`/scenes/${sceneId}`, { method: 'DELETE' });
+            if (out && out.res.ok) {
                 scenes = scenes.filter(s => s.id !== sceneId);
-                for (const s of scenes) {
-                    s.hotspots = (s.hotspots || []).filter(h => h.target_id !== sceneId);
-                }
-                if (tourSettings.start_scene_id === sceneId) {
-                    tourSettings.start_scene_id = null;
-                    tourSettings.start_pitch = null;
-                    tourSettings.start_yaw = null;
-                }
-
                 updateScenesUI();
-                // Update linking dropdown if currently in linking mode.
-                const select = document.getElementById('targetScene');
-                if (select && activeSceneId) {
-                    select.innerHTML = '<option value="">Select Destination...</option>';
-                    scenes.filter(s => s.id !== activeSceneId).forEach(s => {
-                        select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
-                    });
-                }
-
-                if (activeSceneId === sceneId) {
-                    if (scenes.length > 0) {
-                        loadScene(scenes[0].id);
-                    } else {
-                        document.getElementById('gotoStep3').style.display = 'none';
-                        showStep(2);
-                        showEmptyWorkspace();
-                    }
-                } else {
-                    refreshIncomingLinksPanel();
-                }
-            } finally {
-                setLoading(false);
+                if (activeSceneId === sceneId) showEmptyWorkspace();
             }
         }
 
-        function bindLinkingHandler() {
-            viewer.on('mousedown', (e) => {
-                if (document.getElementById('step3').classList.contains('active')) {
-                    const coords = viewer.mouseEventToCoords(e);
-                    lastClickCoords = coords;
-                    document.getElementById('linkingStatus').innerHTML = `<strong>Selected:</strong> Pitch: ${coords[0].toFixed(1)}, Yaw: ${coords[1].toFixed(1)}`;
-                    document.getElementById('portalForm').style.display = 'block';
-
-                    const select = document.getElementById('targetScene');
-                    select.innerHTML = '<option value="">Select Destination...</option>';
-                    getReadyScenes().filter(s => s.id !== activeSceneId).forEach(s => {
-                        select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
-                    });
-                }
-            });
-        }
-
-        function initSceneViewer(id, config) {
+        function loadScene(id, tp, ty, ep, ey) {
+            const s = scenes.find(x => x.id === id);
+            if (!s || (s.processing_status && s.processing_status !== 'ready')) return;
+            activeSceneId = id; updateScenesUI();
+            const url = `/galleries/${projectId}/${id}/${s.web || s.panorama}`;
+            const config = { "type": s.type || "equirectangular", "hfov": tourSettings.default_hfov, "haov": s.haov || 360, "vaov": s.vaov || 180, "panorama": url, "autoLoad": true, "hotSpots": (s.hotspots || []).map(h => ({ pitch: h.pitch, yaw: h.yaw, cssClass: "custom-hotspot", clickHandlerFunc: () => loadScene(h.target_id, null, null, h.entry_pitch, h.entry_yaw) })) };
+            if (ep !== undefined) config.pitch = ep; if (ey !== undefined) config.yaw = ey;
+            if (viewer) viewer.destroy();
             document.getElementById('step1-workspace').style.display = 'none';
             document.getElementById('pano-editor').style.display = 'block';
-            requestAnimationFrame(() => {
-                viewer = pannellum.viewer('pano-editor', config);
-                activeSceneId = id;
-                updateScenesUI();
-                bindLinkingHandler();
-                prefetchLinkedScenes(id);
-                refreshIncomingLinksPanel();
-                try {
-                    viewer.on('load', () => {
-                        try { viewer.resize(); } catch (_) {}
-                        endSceneLoading();
-                    });
-                } catch (_) {}
-                try { viewer.resize(); } catch (_) {}
-            });
-        }
-
-        function getSceneImageUrl(sceneId) {
-            const scene = scenes.find(s => s.id === sceneId);
-            if (!scene) return null;
-            const imageRef = scene.web || scene.panorama;
-            if (!imageRef) return null;
-            return `/galleries/${projectId}/${sceneId}/${imageRef}`;
-        }
-
-        function getScenePreviewUrl(sceneId) {
-            const scene = scenes.find(s => s.id === sceneId);
-            if (!scene) return null;
-            const p = scene.preview || 'preview.jpg';
-            return `/galleries/${projectId}/${sceneId}/${p}`;
-        }
-
-        function prefetchLinkedScenes(sceneId) {
-            const scene = scenes.find(s => s.id === sceneId);
-            if (!scene || !scene.hotspots) return;
-            scene.hotspots.forEach(h => {
-                const targetId = h.target_id;
-                if (!targetId || prefetchCache.has(targetId)) return;
-                const preview = getScenePreviewUrl(targetId);
-                if (preview) {
-                    const img = new Image();
-                    img.src = preview;
-                }
-                const src = getSceneImageUrl(targetId);
-                if (src) {
-                    const img2 = new Image();
-                    img2.src = src;
-                }
-                prefetchCache.add(targetId);
-            });
-        }
-
-        function loadScene(id, targetPitch = null, targetYaw = null, entryPitch = null, entryYaw = null) {
-            const scene = scenes.find(s => s.id === id);
-            if (!scene) return;
-            if (!isSceneReady(scene)) {
-                if (scene.job_id) {
-                    pollJobUntilTerminal(scene.job_id, { refreshTourOnDone: true, showLoader: true });
-                } else {
-                    alert('Scene is still processing.');
-                }
-                return;
-            }
-            const imageRef = scene.web || scene.panorama;
-            if (!imageRef) {
-                alert('This scene has no panorama output yet. Re-upload it as a 360 panorama.');
-                return;
-            }
-            const url = `/galleries/${projectId}/${id}/${imageRef}`;
-            const haov = Math.min(360, Math.max(30, Number(scene.haov || 100)));
-            const vaov = Math.min(180, Math.max(30, Number(scene.vaov || 60)));
-            beginSceneLoading(`Loading: ${scene.name}...`);
-
-            const config = {
-                "type": scene.type || "equirectangular",
-                "hfov": Math.min(120, Math.max(30, Number(tourSettings.default_hfov || 70))),
-                "haov": haov,
-                "vaov": vaov,
-                "panorama": url,
-                "preview": getScenePreviewUrl(id),
-                "autoLoad": true,
-                "sceneFadeDuration": 1000,
-                "minHfov": 30,
-                "maxHfov": 120,
-                "hotSpots": (scene.hotspots || []).map(h => ({
-                    pitch: h.pitch, yaw: h.yaw,
-                    cssClass: "custom-hotspot",
-                    createTooltipFunc: hotspotTooltip,
-                    createTooltipArgs: "Go to " + h.target_name,
-                    clickHandlerFunc: () => transitionToScene(
-                        h.target_id,
-                        h.pitch,
-                        h.yaw,
-                        h.entry_pitch ?? 0,
-                        h.entry_yaw ?? 0
-                    )
-                }))
-            };
-            if (entryPitch !== null && entryYaw !== null) {
-                config.pitch = entryPitch;
-                config.yaw = entryYaw;
-            } else if (tourSettings.start_scene_id === id && targetPitch === null && targetYaw === null) {
-                if (tourSettings.start_pitch !== null) config.pitch = tourSettings.start_pitch;
-                if (tourSettings.start_yaw !== null) config.yaw = tourSettings.start_yaw;
-            }
-
-            if (viewer) {
-                if (targetPitch !== null && targetYaw !== null) {
-                    const currentHfov = viewer.getHfov();
-                    viewer.setHfov(currentHfov - 40, 800);
-                    viewer.lookAt(targetPitch, targetYaw, currentHfov - 40, 800, () => {
-                        viewer.destroy();
-                        initSceneViewer(id, config);
-                    });
-                    return;
-                }
-                viewer.destroy();
-            }
-
-            initSceneViewer(id, config);
-        }
-
-        function transitionToScene(targetId, pitch, yaw, entryPitch = 0, entryYaw = 0) {
-            loadScene(targetId, pitch, yaw, entryPitch, entryYaw);
-        }
-
-        async function setCurrentSceneAsStart() {
-            const sceneId = activeSceneId;
-            if (!projectId) return alert('Create or open a tour first.');
-            if (!sceneId) return;
-            const hasViewerScene = viewer && activeSceneId === sceneId;
-            if (!hasViewerScene) {
-                loadScene(sceneId);
-                alert('Rotate and zoom this scene to desired start view, then click "Set as start" again.');
-                return;
-            }
-            const start_pitch = hasViewerScene ? Number(viewer.getPitch()) : 0;
-            const start_yaw = hasViewerScene ? Number(viewer.getYaw()) : 0;
-            const default_hfov = hasViewerScene ? Number(viewer.getHfov()) : Number(tourSettings.default_hfov || 70);
-            setLoading(true, 'Saving start scene...');
-            try {
-                const res = await apiFetch(`/tours/${projectId}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        start_scene_id: sceneId,
-                        start_pitch,
-                        start_yaw,
-                        default_hfov
-                    })
-                });
-                if (!res) return;
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.tour) {
-                    alert(data.error || 'Failed to set start scene');
-                    return;
-                }
-                tourSettings.start_scene_id = data.tour.start_scene_id || sceneId;
-                tourSettings.start_pitch = Number.isFinite(Number(data.tour.start_pitch)) ? Number(data.tour.start_pitch) : start_pitch;
-                tourSettings.start_yaw = Number.isFinite(Number(data.tour.start_yaw)) ? Number(data.tour.start_yaw) : start_yaw;
-                tourSettings.default_hfov = Number.isFinite(Number(data.tour.default_hfov)) ? Number(data.tour.default_hfov) : default_hfov;
-                updateScenesUI();
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        function refreshIncomingLinksPanel() {
-            const select = document.getElementById('incomingLinkSelect');
-            if (!select) return;
-            const incoming = [];
-            for (const srcScene of scenes) {
-                for (let i = 0; i < (srcScene.hotspots || []).length; i++) {
-                    const hs = srcScene.hotspots[i];
-                    if (hs.target_id === activeSceneId) {
-                        incoming.push({
-                            key: `${srcScene.id}::${i}`,
-                            label: `${srcScene.name} -> ${scenes.find(s => s.id === activeSceneId)?.name || activeSceneId} (#${i + 1})`
-                        });
-                    }
-                }
-            }
-            select.innerHTML = '';
-            if (!incoming.length) {
-                select.innerHTML = '<option value="">No incoming links yet</option>';
-                return;
-            }
-            incoming.forEach(x => {
-                const opt = document.createElement('option');
-                opt.value = x.key;
-                opt.textContent = x.label;
-                select.appendChild(opt);
-            });
-        }
-
-        function storePosForIncomingLink() {
-            if (!viewer || !activeSceneId) return;
-            const select = document.getElementById('incomingLinkSelect');
-            if (!select || !select.value || !select.value.includes('::')) {
-                alert('No incoming link selected');
-                return;
-            }
-            const [sourceSceneId, idxRaw] = select.value.split('::');
-            const idx = parseInt(idxRaw, 10);
-            const sourceScene = scenes.find(s => s.id === sourceSceneId);
-            if (!sourceScene || !sourceScene.hotspots || Number.isNaN(idx) || !sourceScene.hotspots[idx]) {
-                alert('Selected incoming link was not found');
-                return;
-            }
-            sourceScene.hotspots[idx].entry_yaw = Number(viewer.getYaw());
-            sourceScene.hotspots[idx].entry_pitch = Number(viewer.getPitch());
-            document.getElementById('linkingStatus').textContent = `Stored entry camera for link from "${sourceScene.name}"`;
-        }
-
-        function hotspotTooltip(hotSpotDiv, args) {
-            hotSpotDiv.classList.add('custom-hotspot');
-            const span = document.createElement('span');
-            span.innerHTML = args;
-            span.style.cssText = "visibility: hidden; background: rgba(0,0,0,0.8); color: #fff; border-radius: 4px; padding: 5px; position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); white-space: nowrap;";
-            hotSpotDiv.appendChild(span);
-            hotSpotDiv.onmouseover = () => span.style.visibility = 'visible';
-            hotSpotDiv.onmouseout = () => span.style.visibility = 'hidden';
-        }
-
-        function startLinking() {
-            const ready = getReadyScenes();
-            const pending = getPendingScenes();
-            if (ready.length === 0) {
-                if (pending.length > 0) {
-                    alert(`Scenes are still processing (${pending.length}). Wait until they become READY.`);
-                    ensurePendingJobPollers();
-                    return;
-                }
-                alert('Add at least one scene first.');
-                return;
-            }
-            if (!activeSceneId || !ready.find(s => s.id === activeSceneId)) loadScene(ready[0].id);
-            showStep(3);
             document.getElementById('editorHud').style.display = 'block';
+            viewer = pannellum.viewer('pano-editor', config);
+            viewer.on('mousedown', (e) => {
+                const c = viewer.mouseEventToCoords(e); lastClickCoords = c;
+                if (document.getElementById('linkingStatus')) document.getElementById('linkingStatus').textContent = `P: ${c[0].toFixed(2)} | Y: ${c[1].toFixed(2)}`;
+                document.getElementById('portalForm').style.display = 'block';
+                const sel = document.getElementById('targetScene');
+                sel.innerHTML = '<option value="">Target...</option>';
+                scenes.filter(x => x.id !== activeSceneId).forEach(x => sel.innerHTML += `<option value="${x.id}">${x.name}</option>`);
+            });
         }
 
-        function savePortal() {
-            const targetId = document.getElementById('targetScene').value;
-            if (!targetId || !lastClickCoords) return;
+        function showEmptyWorkspace() {
+            if (viewer) viewer.destroy();
+            document.getElementById('pano-editor').style.display = 'none';
+            document.getElementById('step1-workspace').style.display = 'flex';
+            document.getElementById('editorHud').style.display = 'none';
+        }
 
-            const targetScene = scenes.find(s => s.id === targetId);
-            const scene = scenes.find(s => s.id === activeSceneId);
-            if (!scene || !targetScene) return;
-
-            scene.hotspots = scene.hotspots || [];
-            const hotspot = {
-                pitch: lastClickCoords[0],
-                yaw: lastClickCoords[1],
-                target_id: targetId,
-                target_name: targetScene.name,
-                entry_yaw: 0,
-                entry_pitch: 0,
-                label: `Go to ${targetScene.name}`
-            };
-            scene.hotspots.push(hotspot);
-
-            viewer.addHotSpot({
-                pitch: lastClickCoords[0],
-                yaw: lastClickCoords[1],
-                cssClass: "custom-hotspot",
-                createTooltipFunc: hotspotTooltip,
-                createTooltipArgs: "Go to " + targetScene.name,
-                clickHandlerFunc: () => transitionToScene(
-                    hotspot.target_id,
-                    hotspot.pitch,
-                    hotspot.yaw,
-                    hotspot.entry_pitch ?? 0,
-                    hotspot.entry_yaw ?? 0
-                )
-            });
-
+        async function savePortal() {
+            const tid = document.getElementById('targetScene').value;
+            if (!tid || !lastClickCoords) return;
+            const cur = scenes.find(x => x.id === activeSceneId);
+            cur.hotspots = cur.hotspots || [];
+            cur.hotspots.push({ pitch: lastClickCoords[0], yaw: lastClickCoords[1], target_id: tid });
+            viewer.addHotSpot({ pitch: lastClickCoords[0], yaw: lastClickCoords[1], cssClass: "custom-hotspot", clickHandlerFunc: () => loadScene(tid) });
             document.getElementById('portalForm').style.display = 'none';
-            document.getElementById('linkingStatus').textContent = 'Portal added! Click again to add more.';
-            refreshIncomingLinksPanel();
+            showToast('LINKED');
         }
 
         async function finalizeTour() {
-            if (!projectId) return;
-            const pending = getPendingScenes();
-            if (pending.length > 0) {
-                alert(`Cannot publish yet: ${pending.length} scene(s) are still processing (QUEUED/RUNNING).`);
-                ensurePendingJobPollers();
-                return;
-            }
-            const ready = getReadyScenes();
-            if (ready.length === 0) {
-                alert('Tour must have at least one READY scene.');
-                return;
-            }
-            setLoading(true, "Finalizing Tour...");
-            const hotspotData = {};
-            scenes.forEach(s => hotspotData[s.id] = s.hotspots || []);
-
-            try {
-                const hsRes = await apiFetch(`/tours/${projectId}/hotspots/bulk`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(hotspotData)
-                });
-                if (!hsRes) return;
-                const hsData = await hsRes.json();
-                if (!hsRes.ok) {
-                    alert(hsData.error || 'Failed to save hotspots');
-                    return;
-                }
-
-                const res = await apiFetch(`/tours/${projectId}/finalize`, { method: 'POST' });
-                if (!res) return;
-                const data = await res.json();
-                if (!res.ok) {
-                    const msg = data && data.error ? data.error : 'Finalize failed';
-                    alert(msg);
-                    if (data && data.code === 'scenes_processing') ensurePendingJobPollers();
-                    return;
-                }
-                if (data.gallery_url) window.open(data.gallery_url, '_blank');
-            } finally { setLoading(false); }
-        }
-
-        async function downloadFacebook360FirstScene() {
-            if (!projectId) {
-                alert('No tour loaded');
-                return;
-            }
-            setLoading(true, "Preparing Facebook 360 export...");
-            try {
-                const res = await apiFetch(`/tours/${projectId}/export/facebook360`, { method: 'GET' });
-                if (!res) return;
-                if (!res.ok) {
-                    let msg = 'Export failed';
-                    try {
-                        const data = await res.json();
-                        msg = data.error || msg;
-                    } catch { /* ignore */ }
-                    alert(msg);
-                    return;
-                }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                let filename = 'facebook360.jpg';
-                const cd = res.headers.get('Content-Disposition') || '';
-                const m = cd.match(/filename\\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
-                if (m) filename = decodeURIComponent(m[1] || m[2] || filename);
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        async function exportSelfHostedPackage() {
-            if (!projectId) {
-                alert('No tour loaded');
-                return;
-            }
-            if (currentPlanId !== 'business') {
-                const go = confirm('Self-hosted export is available on Business plan. Open billing page to upgrade?');
-                if (go) window.location.href = '/account';
-                return;
-            }
-            setLoading(true, "Packaging self-hosted export...");
-            try {
-                const res = await apiFetch(`/tours/${projectId}/export/self-hosted`, { method: 'GET' });
-                if (!res) return;
-                if (!res.ok) {
-                    let msg = 'Export failed';
-                    try {
-                        const data = await res.json();
-                        msg = data.error || msg;
-                    } catch (_) {}
-                    alert(msg);
-                    return;
-                }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                let filename = 'self-hosted-tour.zip';
-                const cd = res.headers.get('Content-Disposition') || '';
-                const m = cd.match(/filename\\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
-                if (m) filename = decodeURIComponent(m[1] || m[2] || filename);
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        async function copyFullTourShareLink() {
-            if (!projectId) {
-                alert('No tour loaded');
-                return;
-            }
-            setLoading(true, "Fetching share link...");
-            try {
-                const res = await apiFetch(`/tours/${projectId}`, { method: 'GET' });
-                if (!res) return;
-                const data = await res.json();
-                if (!res.ok || !data.tour) {
-                    alert(data.error || 'Failed to fetch tour');
-                    return;
-                }
-                const slug = data.tour.slug;
-                if (!slug) {
-                    alert('Tour slug is missing');
-                    return;
-                }
-                const shareUrl = `${window.location.origin}/t/${slug}`;
-                try {
-                    await navigator.clipboard.writeText(shareUrl);
-                    alert('Copied: ' + shareUrl);
-                } catch {
-                    prompt('Copy this link:', shareUrl);
-                }
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        function showStep(n) {
-            document.querySelectorAll('.sidebar .step').forEach(s => s.classList.remove('active'));
-            const target = document.getElementById('step' + n);
-            if (target) target.classList.add('active');
-            const projectScenes = document.getElementById('project-scenes');
-            projectScenes.style.display = n > 1 ? 'flex' : 'none';
-            updateScenesUI();
-            refreshMobileStudioNav(n);
-        }
-
-        function focusScenesList() {
-            const list = document.getElementById('scenesList');
-            refreshMobileStudioNav(0);
-            if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-
-        function refreshMobileStudioNav(activeStep) {
-            const scenesBtn = document.getElementById('mobileScenesBtn');
-            const addBtn = document.getElementById('mobileAddBtn');
-            const linkBtn = document.getElementById('mobileLinkBtn');
-            if (!scenesBtn || !addBtn || !linkBtn) return;
-            const step2Active = document.getElementById('step2').classList.contains('active');
-            const step3Active = document.getElementById('step3').classList.contains('active');
-            const mode = activeStep === 0 ? 0 : (activeStep || (step3Active ? 3 : (step2Active ? 2 : 0)));
-            scenesBtn.classList.toggle('active', mode === 0);
-            addBtn.classList.toggle('active', mode === 2);
-            linkBtn.classList.toggle('active', mode === 3);
+            setLoading(true, "Publishing...");
+            const hs = {}; scenes.forEach(s => hs[s.id] = s.hotspots || []);
+            await apiFetch(`/tours/${projectId}/hotspots/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(hs) });
+            const out = await apiFetch(`/tours/${projectId}/finalize`, { method: 'POST' });
+            if (out && out.res.ok && out.data.gallery_url) window.open(out.data.gallery_url, '_blank');
+            setLoading(false);
         }
 
         function setLoading(show, text = "") {
-            document.getElementById('loader').style.display = show ? 'flex' : 'none';
-            document.getElementById('loaderText').textContent = text;
-            if (!show) {
-                const p = document.getElementById('loaderProgress');
-                if (p) p.style.display = 'none';
-                if (sceneLoadTimer) { clearInterval(sceneLoadTimer); sceneLoadTimer = null; }
-                sceneLoadPct = 0;
+            const p = document.getElementById('top-progress');
+            const f = document.getElementById('top-progress-fill');
+            if (p && f) {
+                p.style.display = show ? 'block' : 'none';
+                f.style.width = show ? '30%' : '0%';
             }
         }
 
-        function setLoadingProgress(pct) {
-            const wrap = document.getElementById('loaderProgress');
-            const bar = document.getElementById('loaderBar');
-            const label = document.getElementById('loaderPct');
-            if (!wrap || !bar || !label) return;
-            wrap.style.display = 'block';
-            const v = Math.max(0, Math.min(100, Math.round(pct)));
-            bar.style.width = `${v}%`;
-            label.textContent = `${v}%`;
-        }
-
-        function beginSceneLoading(text = "Loading scene...") {
-            // Pannellum doesn't expose byte progress; use a smooth fake progress that completes on 'load'.
-            setLoading(true, text);
-            sceneLoadPct = 8;
-            setLoadingProgress(sceneLoadPct);
-            if (sceneLoadTimer) clearInterval(sceneLoadTimer);
-            sceneLoadTimer = setInterval(() => {
-                const cap = 92;
-                if (sceneLoadPct >= cap) return;
-                const step = sceneLoadPct < 40 ? 6 : (sceneLoadPct < 70 ? 3 : 1);
-                sceneLoadPct = Math.min(cap, sceneLoadPct + step);
-                setLoadingProgress(sceneLoadPct);
-            }, 220);
-        }
-
-        function endSceneLoading() {
-            setLoadingProgress(100);
-            setTimeout(() => setLoading(false), 180);
-        }
-
-        document.getElementById('sceneFiles')?.addEventListener('change', (event) => {
-            const input = event.target;
-            const panoToggle = document.getElementById('isPano');
-            if (!input || !panoToggle) return;
-            if (input.files && input.files.length === 1) {
-                panoToggle.checked = true;
-            }
-        });
+        async function logout() { await apiFetch('/auth/logout', { method: 'POST' }); location.href = '/login.html'; }
 
         (async function bootstrap() {
-            try {
-                const payload = JSON.stringify({});
-                if (navigator.sendBeacon) {
-                    navigator.sendBeacon('/api/analytics/home', new Blob([payload], { type: 'application/json' }));
-                } else {
-                    fetch('/api/analytics/home', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true }).catch(() => {});
-                }
-            } catch (_) {}
-            refreshPlanGatedActions();
             await loadCurrentUser();
-            const tourId = getTourIdFromQuery();
-            if (tourId) {
-                await loadExistingTour(tourId);
-            }
-            ensurePendingJobPollers();
+            const tid = getTourIdFromQuery();
+            if (tid) await loadExistingTour(tid);
         })();
     </script>
 </body>

@@ -3,122 +3,194 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Login - Pan-o-Rama</title>
+  <title>Login - Lokalny Obiektyw</title>
+  <link rel="stylesheet" href="/css/main.css" />
   <style>
-    * { box-sizing: border-box; }
-    html { height: 100%; }
-    body { font-family: Segoe UI, sans-serif; margin: 0; background: #111; color: #eee; min-height: 100vh; min-height: 100svh; min-height: 100dvh; padding: calc(20px + env(safe-area-inset-top, 0px)) 16px calc(20px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; justify-content: center; }
-    .wrap { width: min(480px, 100%); background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 24px; }
-    h1 { margin-top: 0; font-size: 22px; }
-    .row { margin-bottom: 12px; }
-    input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; box-sizing: border-box; }
-    button { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: #007bff; color: #fff; font-weight: 700; cursor: pointer; }
-    .alt { margin-top: 10px; background: #333; }
-    .msg { margin-top: 12px; color: #9ecbff; min-height: 18px; }
-    a { color: #89c2ff; }
-    @media (max-width: 520px) {
-      body { align-items: stretch; }
-      .wrap { padding: 18px; border-radius: 0; min-height: calc(100svh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 40px); }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .login-header img {
+      height: 64px;
+      margin-bottom: 16px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .tabs {
+      display: flex;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: 0.2s;
+    }
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+    #register-fields {
+      display: none;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Pan-o-Rama Account</h1>
-    <div class="row"><input id="email" type="email" placeholder="Email" /></div>
-    <div class="row"><input id="password" type="password" placeholder="Password (min 8)" /></div>
-    <div class="row"><input id="displayName" type="text" placeholder="Display name (for register)" /></div>
-    <button onclick="login()">Login</button>
-    <button class="alt" onclick="register()">Register</button>
-    <button class="alt" onclick="resendVerification()">Resend verification email</button>
-    <button class="alt" onclick="window.location.href='/reset-password'">Forgot password</button>
-    <p class="msg" id="msg"></p>
-    <p><a href="/">Back to editor</a></p>
+  <div class="login-card card">
+    <div class="login-header">
+      <img src="/img/logo.png" alt="Lokalny Obiektyw" />
+      <h1>Welcome back</h1>
+      <p class="muted">Enter your credentials to access your studio</p>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="setTab('login')">Login</div>
+      <div class="tab" onclick="setTab('register')">Register</div>
+    </div>
+
+    <form id="auth-form" onsubmit="handleAuth(event)">
+      <div class="form-group">
+        <label for="email">Email address</label>
+        <input id="email" type="email" placeholder="name@company.com" required />
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="••••••••" required minlength="8" />
+      </div>
+      <div id="register-fields">
+        <div class="form-group">
+          <label for="displayName">Display name</label>
+          <input id="displayName" type="text" placeholder="John Doe" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="submit-btn" class="btn">Sign in</button>
+        <button type="button" class="btn btn-ghost" onclick="resendVerification()">Resend verification email</button>
+        <a href="/reset_password.html" class="muted" style="text-align: center;">Forgot your password?</a>
+      </div>
+    </form>
+    
+    <div style="margin-top: 24px; text-align: center;">
+        <a href="/" class="muted">← Back to studio</a>
+    </div>
   </div>
-<script>
-async function login() {
-  await auth('/auth/login', { email: email.value.trim(), password: password.value });
-}
-async function register() {
-  msg.textContent = '';
-  const payload = {
-    email: email.value.trim(),
-    password: password.value,
-    display_name: displayName.value.trim()
-  };
-  const res = await fetch('/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    msg.textContent = data.error || 'Register failed';
-    return;
-  }
-  if (data.user) {
-    window.location.href = '/dashboard';
-    return;
-  }
-  msg.textContent = 'Registration successful. Please check your email and confirm your account.';
-}
 
-async function resendVerification() {
-  msg.textContent = '';
-  const e = email.value.trim();
-  if (!e) {
-    msg.textContent = 'Enter your email first.';
-    return;
-  }
-  const res = await fetch('/auth/verification/resend', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: e })
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    msg.textContent = data.error || 'Failed to resend verification email';
-    return;
-  }
-  msg.textContent = data.message || 'Verification email sent';
-}
-async function auth(url, payload) {
-  msg.textContent = '';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (data.code === 'email_not_verified') {
-      msg.textContent = 'Please verify your email first. Use "Resend verification email" if needed.';
-      return;
+  <script src="/js/api.js"></script>
+  <script>
+    let mode = 'login';
+
+    function setTab(m) {
+      mode = m;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      const activeTab = document.querySelector(`.tab:nth-child(${mode === 'login' ? 1 : 2})`);
+      activeTab.classList.add('active');
+      
+      const regFields = document.getElementById('register-fields');
+      const submitBtn = document.getElementById('submit-btn');
+      const headerTitle = document.querySelector('.login-header h1');
+      const headerSub = document.querySelector('.login-header p');
+
+      if (mode === 'register') {
+        regFields.style.display = 'block';
+        submitBtn.textContent = 'Create account';
+        headerTitle.textContent = 'Create account';
+        headerSub.textContent = 'Join Lokalny Obiektyw today';
+      } else {
+        regFields.style.display = 'none';
+        submitBtn.textContent = 'Sign in';
+        headerTitle.textContent = 'Welcome back';
+        headerSub.textContent = 'Enter your credentials to access your studio';
+      }
     }
-    msg.textContent = data.error || 'Request failed';
-    return;
-  }
-  window.location.href = '/dashboard';
-}
 
-(function initLoginHints() {
-  const p = new URLSearchParams(window.location.search);
-  const verified = p.get('verified');
-  const reason = p.get('reason');
-  const reset = p.get('reset');
-  if (reset === '1') {
-    msg.textContent = 'Password updated. You can now log in.';
-    return;
-  }
-  if (verified === '1') {
-    msg.textContent = 'Email confirmed. You can now log in.';
-    return;
-  }
-  if (verified === '0') {
-    if (reason === 'expired') msg.textContent = 'Verification link expired. Request a new email.';
-    else msg.textContent = 'Invalid verification link. Request a new email.';
-  }
-})();
-</script>
+    async function handleAuth(e) {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const displayName = document.getElementById('displayName').value.trim();
+
+      if (mode === 'login') {
+        const out = await apiFetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        if (!out) return;
+        if (out.res.ok) {
+          window.location.href = '/dashboard.html';
+        } else {
+          showToast(out.data.error || 'Login failed', 'error');
+        }
+      } else {
+        const out = await apiFetch('/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, display_name: displayName })
+        });
+        if (!out) return;
+        if (out.res.ok) {
+          showToast('Registration successful! Please check your email.', 'success');
+          setTab('login');
+        } else {
+          showToast(out.data.error || 'Registration failed', 'error');
+        }
+      }
+    }
+
+    async function resendVerification() {
+      const email = document.getElementById('email').value.trim();
+      if (!email) {
+        showToast('Please enter your email address first', 'error');
+        return;
+      }
+      const out = await apiFetch('/auth/verification/resend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      if (!out) return;
+      if (out.res.ok) {
+        showToast(out.data.message || 'Verification email sent', 'success');
+      } else {
+        showToast(out.data.error || 'Failed to resend email', 'error');
+      }
+    }
+
+    (function init() {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('verified') === '1') showToast('Email verified! You can now log in.', 'success');
+      if (p.get('reset') === '1') showToast('Password reset successful!', 'success');
+    })();
+  </script>
 </body>
 </html>
