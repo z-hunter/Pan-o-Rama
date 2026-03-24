@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, send_from_directory, send_file, g, uuid
+from flask import Flask, request, jsonify, send_from_directory, send_file, g
+import uuid
 import os
 import logging
 from flask_cors import CORS
