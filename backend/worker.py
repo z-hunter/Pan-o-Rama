@@ -3,7 +3,7 @@ import sys
 import traceback
 import json
 from redis import Redis
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 
 # Add current dir to path to allow absolute imports
 sys.path.append(os.getcwd())
@@ -15,7 +15,8 @@ from backend.services.job_service import update_job_status, get_job
 from backend.services.scene_service import process_scene_from_raw_paths
 
 def process_job_task(jid):
-    """
+    # ... (function body remains the same)
+
     Entrypoint for RQ worker.
     """
     # Create a minimal app-like context for DB access if needed
