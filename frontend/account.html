@@ -4,50 +4,75 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Account Settings - Lokalny Obiektyw</title>
-  <link rel="stylesheet" href="/css/main.css" />
+  <link rel="stylesheet" href="/css/main.css?v=5" />
   <style>
-    .account-container {
-      padding: 40px 0;
-      max-width: 800px;
+    .account-container { padding: 40px 0; }
+    
+    .settings-grid {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: 1fr 1fr;
+      align-items: start;
+      margin-bottom: 48px;
     }
+    
+    @media (max-width: 860px) {
+      .settings-grid { grid-template-columns: 1fr; }
+    }
+
     .section-title {
       margin-bottom: 24px;
       padding-bottom: 12px;
       border-bottom: 1px solid var(--border);
+      font-size: 18px;
     }
+
+    .plan-grid {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: repeat(3, 1fr);
+    }
+    
+    @media (max-width: 1024px) {
+      .plan-grid { grid-template-columns: 1fr; }
+    }
+
     .plan-card {
-      padding: 24px;
-      border: 2px solid var(--border);
-      border-radius: var(--radius);
-      transition: 0.2s;
+      padding: 32px 24px;
+      border: 1px solid var(--border);
+      background: var(--surface);
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      height: 100%;
     }
     .plan-card.active {
       border-color: var(--primary);
-      background-color: rgba(59, 130, 246, 0.05);
+      background: #050505;
+      box-shadow: inset 0 0 20px rgba(245, 158, 11, 0.05);
     }
     .plan-price {
-      font-size: 24px;
+      font-size: 32px;
       font-weight: 800;
-      margin: 16px 0;
+      margin: 20px 0;
+      color: var(--primary);
     }
     .plan-features {
       list-style: none;
-      margin-bottom: 24px;
+      margin-bottom: 32px;
+      flex: 1;
     }
     .plan-features li {
-      margin-bottom: 8px;
-      font-size: 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
       color: var(--text-muted);
+      font-family: var(--font-mono);
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
     .plan-features li::before {
-      content: '✓';
-      color: var(--success);
+      content: '>';
+      color: var(--primary);
       font-weight: bold;
     }
   </style>
@@ -56,94 +81,97 @@
   <header class="header">
     <div class="logo">
       <img src="/img/logo.png" alt="LO" />
-      <span>Studio Dashboard</span>
+      <span>USER_PROFILE</span>
     </div>
     <nav class="nav-links">
-      <a href="/dashboard.html" class="nav-link">My Tours</a>
+      <a href="/dashboard.html" class="nav-link">Tours</a>
       <a href="/account.html" class="nav-link active">Account</a>
-      <button class="btn btn-ghost btn-sm" onclick="logout()">Logout</button>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">LOGOUT</button>
     </nav>
   </header>
 
   <main class="container account-container">
-    <h1 class="mb-8">Account Settings</h1>
+    <div class="settings-grid">
+      <!-- Profile -->
+      <section>
+        <h2 class="section-title">Identity</h2>
+        <div class="card">
+          <form onsubmit="handleUpdateProfile(event)">
+            <div class="mb-4">
+              <label class="block mb-1">Email (Static)</label>
+              <input id="email" type="email" disabled style="opacity: 0.5;" />
+            </div>
+            <div class="mb-6">
+              <label class="block mb-1">Display Name</label>
+              <input id="displayName" placeholder="OPERATOR_NAME" required />
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Sync Profile</button>
+          </form>
+        </div>
+      </section>
 
-    <section class="mb-8">
-      <h2 class="section-title">Profile Information</h2>
-      <div class="card">
-        <form onsubmit="handleUpdateProfile(event)">
-          <div class="mb-4">
-            <label class="muted mb-2 block">Email Address</label>
-            <input id="email" type="email" disabled />
-            <p class="muted mt-1" style="font-size: 12px;">Email cannot be changed.</p>
-          </div>
-          <div class="mb-4">
-            <label class="muted mb-2 block">Display Name</label>
-            <input id="displayName" placeholder="Your name" required />
-          </div>
-          <button type="submit" class="btn">Update Profile</button>
-        </form>
-      </div>
-    </section>
+      <!-- Security -->
+      <section>
+        <h2 class="section-title">Security</h2>
+        <div class="card">
+          <form onsubmit="handleUpdatePassword(event)">
+            <div class="mb-4">
+              <label class="block mb-1">Current Passkey</label>
+              <input id="currentPassword" type="password" required />
+            </div>
+            <div class="mb-4">
+              <label class="block mb-1">New Passkey</label>
+              <input id="newPassword" type="password" required minlength="8" />
+            </div>
+            <button type="submit" class="btn btn-secondary" style="width: 100%;">Update Credentials</button>
+          </form>
+        </div>
+      </section>
+    </div>
 
-    <section class="mb-8">
-      <h2 class="section-title">Security</h2>
-      <div class="card">
-        <form onsubmit="handleUpdatePassword(event)">
-          <div class="mb-4">
-            <label class="muted mb-2 block">Current Password</label>
-            <input id="currentPassword" type="password" required />
-          </div>
-          <div class="mb-4">
-            <label class="muted mb-2 block">New Password</label>
-            <input id="newPassword" type="password" required minlength="8" />
-          </div>
-          <button type="submit" class="btn btn-secondary">Change Password</button>
-        </form>
-      </div>
-    </section>
-
-    <section class="mb-8">
-      <h2 class="section-title">Subscription Plan</h2>
-      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+    <section>
+      <h2 class="section-title">Tier Management</h2>
+      <div class="plan-grid">
         
         <div class="plan-card" id="plan-free">
           <div>
-            <h3>Free</h3>
-            <div class="plan-price">$0<span class="muted" style="font-size: 14px; font-weight: normal;">/mo</span></div>
+            <h3>Free Tier</h3>
+            <div class="plan-price">$0<span class="muted mono" style="font-size: 12px;"> / MO</span></div>
             <ul class="plan-features">
-              <li>Up to 2 Tours</li>
-              <li>Watermark enabled</li>
-              <li>Standard support</li>
+              <li>Up to 2 Active Tours</li>
+              <li>Embedded Watermark</li>
+              <li>Standard Resolution</li>
             </ul>
           </div>
-          <button class="btn btn-ghost" disabled>Current Plan</button>
+          <button class="btn btn-ghost" disabled>ACTIVE_TIER</button>
         </div>
 
         <div class="plan-card" id="plan-pro">
           <div>
-            <h3>Pro</h3>
-            <div class="plan-price">$49<span class="muted" style="font-size: 14px; font-weight: normal;">/mo</span></div>
+            <h3>Pro Tier</h3>
+            <div class="plan-price">$49<span class="muted mono" style="font-size: 12px;"> / MO</span></div>
             <ul class="plan-features">
-              <li>Up to 50 Tours</li>
+              <li>Up to 50 Active Tours</li>
               <li>No Watermark</li>
-              <li>Priority support</li>
+              <li>Enhanced Previews</li>
+              <li>Priority Support</li>
             </ul>
           </div>
-          <button class="btn" onclick="upgrade('pro')">Upgrade to Pro</button>
+          <button class="btn btn-primary" onclick="upgrade('pro')">UPGRADE_TO_PRO</button>
         </div>
 
         <div class="plan-card" id="plan-business">
           <div>
-            <h3>Business</h3>
-            <div class="plan-price">$199<span class="muted" style="font-size: 14px; font-weight: normal;">/mo</span></div>
+            <h3>Enterprise</h3>
+            <div class="plan-price">$199<span class="muted mono" style="font-size: 12px;"> / MO</span></div>
             <ul class="plan-features">
-              <li>Up to 500 Tours</li>
-              <li>White-label (No branding)</li>
-              <li>API Access</li>
+              <li>500+ Active Tours</li>
+              <li>White-label (No LO Branding)</li>
+              <li>Self-Hosted Exports</li>
+              <li>Direct API Access</li>
             </ul>
           </div>
-          <button class="btn" onclick="upgrade('business')">Upgrade to Biz</button>
+          <button class="btn btn-primary" onclick="upgrade('business')">UPGRADE_TO_BIZ</button>
         </div>
 
       </div>
@@ -166,7 +194,7 @@
       if (activeCard) {
         activeCard.classList.add('active');
         const btn = activeCard.querySelector('button');
-        btn.textContent = 'Current Plan';
+        btn.textContent = 'CURRENT_ACTIVE_TIER';
         btn.disabled = true;
         btn.className = 'btn btn-ghost';
       }
@@ -180,8 +208,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName })
       });
-      if (out && out.res.ok) showToast('Profile updated', 'success');
-      else showToast(out.data.error || 'Update failed', 'error');
+      if (out && out.res.ok) showToast('PROFILE_SYNCHRONIZED');
+      else showToast(out?.data?.error || 'FAILURE', 'error');
     }
 
     async function handleUpdatePassword(e) {
@@ -194,17 +222,15 @@
         body: JSON.stringify({ current_password, new_password })
       });
       if (out && out.res.ok) {
-        showToast('Password changed successfully', 'success');
+        showToast('CREDENTIALS_UPDATED');
         e.target.reset();
       } else {
-        showToast(out.data.error || 'Failed to change password', 'error');
+        showToast(out?.data?.error || 'FAILURE', 'error');
       }
     }
 
-    async function upgrade(plan) {
-      // For now we simulate/direct to a placeholder or wait for Phase 7
-      showToast(`Redirecting to ${plan} checkout...`, 'info');
-      // In Phase 7 this will call Stripe
+    function upgrade(plan) {
+      showToast(`REDIRECTING_TO_${plan.toUpperCase()}_CHECKOUT...`, 'info');
     }
 
     init();

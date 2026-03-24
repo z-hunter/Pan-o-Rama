@@ -84,6 +84,8 @@ def ensure_scene_studio_web_pano(tour_id, scene_id, source_filename):
     )
 
 def serialize_tour(row):
+    # Import here to avoid circular dependencies
+    from backend.services.tour_service import ensure_tour_cover_image
     return {
         "id": row["id"],
         "owner_id": row["owner_id"],
@@ -98,6 +100,7 @@ def serialize_tour(row):
         "status": row["status"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "cover_image": ensure_tour_cover_image(row),
     }
 
 def serialize_scene(row):

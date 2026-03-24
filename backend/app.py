@@ -3028,8 +3028,7 @@ def list_projects():
         if current_user_is_business():
             rows = db.execute(
                 """
-                SELECT id, title, description, slug, created_at, start_scene_id, start_yaw, start_pitch
-                FROM tours
+                SELECT * FROM tours
                 WHERE deleted_at IS NULL AND status = 'published'
                 ORDER BY created_at DESC
                 """
@@ -3037,26 +3036,14 @@ def list_projects():
         else:
             rows = db.execute(
                 """
-                SELECT id, title, description, slug, created_at, start_scene_id, start_yaw, start_pitch
-                FROM tours
+                SELECT * FROM tours
                 WHERE deleted_at IS NULL AND visibility = 'public' AND status = 'published'
                 ORDER BY created_at DESC
                 """
             ).fetchall()
         projects = []
         for r in rows:
-            cover_url = ensure_tour_cover_image(r)
-            projects.append(
-                {
-                    "project_id": r["id"],
-                    "title": r["title"],
-                    "description": r["description"] or "",
-                    "slug": r["slug"],
-                    "created_at": r["created_at"],
-                    "gallery_url": f"/t/{r['slug']}",
-                    "cover_url": cover_url,
-                }
-            )
+            projects.append(serialize_tour(r))
         return jsonify(projects), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -3191,7 +3178,7 @@ def generate_tour(project_id, scenes, watermark_enabled=False, force_previews=Fa
         # Serve a web-safe pano by default to avoid browser freezes on very large textures.
         # Keep the original hi-res URL available for an optional "HD" user toggle in the player.
         orig_name = scene.get("hires") or pano_name
-        web_name = ensure_scene_web_pano(project_id, scene["id"], orig_name)
+        web_name = ensure_scene_web_pano(project_id, scene["id"], orig_name, WEB_PANO_FILENAME)
         served_name = web_name or orig_name
         panorama_url = f"{scene['id']}/{served_name}"
         hires_url = f"{scene['id']}/{orig_name}" if served_name != orig_name else None
