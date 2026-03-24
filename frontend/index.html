@@ -8,41 +8,55 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        body { flex-direction: row; }
+        body { flex-direction: row; background-color: var(--bg-app); }
+        
         .sidebar {
             width: 340px; min-width: 340px; height: 100vh;
-            border-right: 1px solid var(--border);
-            display: flex; flex-direction: column; padding: 0; background: #050505;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid rgba(72, 72, 71, 0.15);
+            display: flex; flex-direction: column; padding: 0;
         }
-        .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
+        
+        .sidebar-tabs { 
+            display: flex; 
+            background-color: var(--bg-sidebar);
+        }
+        
         .sidebar-tab {
-            flex: 1; padding: 14px; text-align: center; font-family: var(--font-mono);
+            flex: 1; padding: 16px; text-align: center; 
+            font-family: var(--font-display);
             font-size: 11px; font-weight: 700; cursor: pointer; color: var(--text-muted);
             border-bottom: 2px solid transparent; transition: 0.2s;
+            letter-spacing: 0.1em;
         }
-        .sidebar-tab:hover { color: var(--text); }
+        .sidebar-tab:hover { color: var(--text); background: rgba(255,255,255,0.02); }
         .sidebar-tab.active {
-            color: var(--primary); border-bottom-color: var(--primary);
-            background: rgba(245, 158, 11, 0.05);
+            color: var(--primary); 
+            border-bottom-color: var(--primary);
+            background: rgba(129, 236, 255, 0.03);
         }
-        .sidebar-content { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-        .main-stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-        .viewer-container { flex: 1; position: relative; background: #000; }
+        
+        .sidebar-content { 
+            flex: 1; overflow-y: auto; padding: 32px 24px; 
+            display: flex; flex-direction: column; gap: 32px; 
+        }
+        
+        .main-stage { flex: 1; display: flex; flex-direction: column; min-width: 0; background-color: var(--bg-void); }
+        
         .tab-panel { display: none; }
         .tab-panel.active { display: block; }
-        .scene-item {
-            background: #0a0a0a; border: 1px solid var(--border);
-            padding: 10px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
-        }
-        .scene-item.active { border-color: var(--primary); box-shadow: inset 0 0 10px rgba(245, 158, 11, 0.1); }
-        .empty-state {
-            padding: 40px 20px; text-align: center; border: 1px dashed var(--border);
-            color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;
-        }
-        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
-        .pnlm-control-bar { background: rgba(0,0,0,0.8) !important; border: 1px solid var(--border) !important; }
         
-        /* Silent Progress Bar at top of viewer */
+        /* Industrial Component Spacing */
+        .section-header { margin-bottom: 24px; }
+        
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
+        .pnlm-control-bar { 
+            background: rgba(26, 26, 26, 0.7) !important; 
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1) !important; 
+            border-radius: 0 !important;
+        }
+        
         #top-progress {
             position: absolute; top: 0; left: 0; width: 100%; height: 2px;
             background: transparent; z-index: 1000; display: none;
@@ -60,76 +74,76 @@
 
         <div class="sidebar-content">
             <div id="panel-scenes" class="tab-panel active">
-                <div class="flex justify-between items-center mb-4">
+                <div class="flex justify-between items-center section-header">
                     <h3>Library</h3>
                     <span class="badge" id="scene-count-badge">0</span>
                 </div>
                 <div id="scenesList" class="mb-8"></div>
-                <div class="card">
-                    <h4 class="mb-4">Add Scene</h4>
-                    <div class="mb-4">
-                        <label class="block mb-1">Name</label>
-                        <input type="text" id="sceneName" placeholder="ROOM_01">
+                <div class="card" style="background-color: var(--bg-app);">
+                    <h4 class="mb-6">Upload Engine</h4>
+                    <div class="mb-6">
+                        <label class="label-technical block mb-2">Identifier</label>
+                        <input type="text" id="sceneName" placeholder="SCAN_DATA_01">
                     </div>
-                    <div class="mb-4">
-                        <label class="block mb-1">File</label>
+                    <div class="mb-6">
+                        <label class="label-technical block mb-2">Source Assets</label>
                         <input type="file" id="sceneFiles" multiple accept="image/*">
                     </div>
-                    <div class="mb-4 flex items-center gap-2">
+                    <div class="mb-8 flex items-center gap-2">
                         <input type="checkbox" id="isPano" style="width:auto;" checked>
-                        <label for="isPano">360° Panorama</label>
+                        <label for="isPano" class="label-technical">Spherical Mapping</label>
                     </div>
-                    <button class="btn btn-primary" style="width:100%;" id="addBtn" onclick="addScene()">Process & Add</button>
+                    <button class="btn btn-primary" style="width:100%;" id="addBtn" onclick="addScene()">Process Stream</button>
                 </div>
             </div>
 
             <div id="panel-tour" class="tab-panel">
                 <div id="tour-empty-state" class="empty-state">
-                    NO SCENES DETECTED.<br>UPLOAD SCENES TO CONFIGURE.
+                    NO_DATA_LINKED<br>AWAITING_ASSET_INGESTION
                 </div>
                 <div id="tour-controls" style="display:none;">
-                    <h3 class="mb-4">Connectivity</h3>
-                    <button class="btn mb-4" style="width:100%;" onclick="startLinking()">Enter Linking Mode</button>
-                    <div id="portalForm" style="display:none;" class="card mb-4">
-                        <label class="block mb-2">Target Destination</label>
+                    <h3 class="mb-6">Topology</h3>
+                    <button class="btn mb-6" style="width:100%;" onclick="startLinking()">Node Mapping Mode</button>
+                    <div id="portalForm" style="display:none;" class="card mb-6" style="background-color: var(--bg-app);">
+                        <label class="label-technical block mb-2">Target Node</label>
                         <select id="targetScene" class="mb-4"></select>
                         <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Establish Link</button>
                     </div>
-                    <div class="card mb-4">
-                        <label class="block mb-2">Inbound Links</label>
+                    <div class="card mb-6" style="background-color: var(--bg-app);">
+                        <label class="label-technical block mb-2">Inbound Vectors</label>
                         <select id="incomingLinkSelect" class="mb-4"></select>
-                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Set Entry Angle</button>
+                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Fix Entry Vector</button>
                     </div>
-                    <h3 class="mt-8 mb-4">Configuration</h3>
-                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set as Home View</button>
+                    <h3 class="mt-8 mb-6">Orientation</h3>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set Origin View</button>
                 </div>
             </div>
 
             <div id="panel-sharing" class="tab-panel">
-                <h3 class="mb-4">Distribution</h3>
-                <div class="card mb-4">
-                    <label class="block mb-2">Visibility</label>
-                    <select id="tourVisibility" class="mb-4">
-                        <option value="public">Public</option>
-                        <option value="private">Private</option>
+                <h3 class="mb-6">Deployment</h3>
+                <div class="card mb-6" style="background-color: var(--bg-app);">
+                    <label class="label-technical block mb-2">Access Protocol</label>
+                    <select id="tourVisibility" class="mb-6">
+                        <option value="public">Public_Access</option>
+                        <option value="private">Restricted_Mode</option>
                     </select>
-                    <button class="btn btn-primary" style="width:100%;" onclick="finalizeTour()">Publish to Cloud</button>
+                    <button class="btn btn-primary" style="width:100%;" onclick="finalizeTour()">Publish to Mainnet</button>
                 </div>
-                <div class="card mb-4">
-                    <h4 class="mb-2">External Assets</h4>
-                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="downloadFacebook360FirstScene()">Export Facebook 360</button>
-                    <button class="btn btn-secondary btn-sm" style="width:100%;" id="exportSelfHostedBtn" onclick="exportSelfHostedPackage()">Export Self-Hosted ZIP</button>
-                    <button class="btn btn-primary btn-sm mt-2" id="upgradeBusinessBtn" style="display:none; width:100%;" onclick="window.location.href='/account'">Upgrade for Exports</button>
+                <div class="card mb-6" style="background-color: var(--bg-app);">
+                    <h4 class="mb-4">Export Modules</h4>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="downloadFacebook360FirstScene()">FB_360_EXPORT</button>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" id="exportSelfHostedBtn" onclick="exportSelfHostedPackage()">SELF_HOST_PACKAGE</button>
+                    <button class="btn btn-primary btn-sm mt-2" id="upgradeBusinessBtn" style="display:none; width:100%;" onclick="window.location.href='/account'">Unlock_Exports</button>
                 </div>
-                <div class="card">
-                    <label class="block mb-2">Short Link</label>
-                    <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="copyFullTourShareLink()">Copy URL to Clipboard</button>
+                <div class="card" style="background-color: var(--bg-app);">
+                    <label class="label-technical block mb-2">Resource Link</label>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="copyFullTourShareLink()">Copy_Pointer_URL</button>
                 </div>
             </div>
         </div>
 
-        <div id="step1" style="padding: 24px; border-top: 1px solid var(--border);">
-            <button class="btn btn-primary" style="width: 100%;" onclick="createProject()">New Project</button>
+        <div id="step1" style="padding: 32px 24px; background-color: var(--bg-sidebar); border-top: 1px solid rgba(72, 72, 71, 0.15);">
+            <button class="btn btn-primary" style="width: 100%;" onclick="createProject()">New Sequence</button>
         </div>
     </aside>
 
