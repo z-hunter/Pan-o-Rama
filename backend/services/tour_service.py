@@ -162,7 +162,12 @@ def generate_tour(tour_id, scenes, watermark_enabled=True, force_previews=False,
     tour_data = {
         "id": tour_id,
         "scenes": scenes,
-        "settings": tour_settings or {},
+        "settings": {
+            "start_scene_id": tour_settings.get("start_scene_id") if tour_settings else None,
+            "start_pitch": tour_settings.get("start_pitch") if tour_settings else 0,
+            "start_yaw": tour_settings.get("start_yaw") if tour_settings else 0,
+            "title": tour_settings.get("title") if tour_settings else "Tour"
+        },
         "watermark": watermark_enabled,
         "v": GALLERY_TEMPLATE_VERSION
     }

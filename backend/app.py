@@ -164,6 +164,12 @@ def create_app():
     def serve_gallery_files(project_id, filename):
         return send_from_directory(os.path.join(PROCESSED_FOLDER, project_id), filename)
 
+    @app.route('/api/analytics/tour/end', methods=['POST'])
+    def track_tour_end():
+        data = request.get_json(silent=True) or {}
+        analytics_track("tour_end", tour_id=data.get("tour_id"), meta={"duration_sec": data.get("duration_sec")})
+        return jsonify({"status": "ok"}), 200
+
     return app
 
 app = create_app()

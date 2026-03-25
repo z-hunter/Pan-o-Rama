@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Lokalny Obiektyw - Player</title>
+    <style>
+        :root {
+            --primary: #81ecff;
+            --bg: #000;
+        }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #css3d-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        #css3d-container > div { pointer-events: auto; }
+        
+        .hotspot-arrow {
+            width: 80px; height: 80px;
+            background: rgba(129, 236, 255, 0.2);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid var(--primary);
+        }
+        .hotspot-arrow::after {
+            content: '▲';
+            color: var(--primary);
+            font-size: 24px;
+        }
+        .hotspot-arrow:hover {
+            background: rgba(129, 236, 255, 0.5);
+            transform: scale(1.1);
+            box-shadow: 0 0 20px var(--primary);
+        }
+        
+        #ui-overlay {
+            position: absolute; top: 20px; left: 20px; z-index: 100;
+            color: white; pointer-events: none;
+        }
+        #watermark {
+            position: absolute; bottom: 30px; right: 30px;
+            opacity: 0.4; z-index: 100;
+        }
+        
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; align-items: center; justify-content: center;
+            z-index: 1000; transition: opacity 0.5s;
+        }
+        .loading-text { color: var(--primary); font-family: monospace; letter-spacing: 4px; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="css3d-container"></div>
+    
+    <div id="ui-overlay">
+        <h2 id="scene-title" style="margin: 0; font-weight: 300; letter-spacing: 2px;">LOADING...</h2>
+    </div>
+
+    <div id="watermark">
+        <img src="/img/logo.png" style="height: 40px;" alt="LO" />
+    </div>
+
+    <div id="loading" class="loading-overlay">
+        <div class="loading-text">INITIALIZING_ENGINE...</div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/",
+            "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.12.5/index.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
+        import gsap from 'gsap';
+
+        /*{{TOUR_DATA}}*/
+
+        class AdvancedViewer {
+            constructor(data) {
+                this.data = data || window.TOUR_DATA;
+                if (!this.data) return console.error("TOUR_DATA_NOT_FOUND");
+
+                this.initEngine();
+                this.initEventListeners();
+                this.start();
+            }
+
+            initEngine() {
+                this.scene = new THREE.Scene();
+                this.cssScene = new THREE.Scene();
+                
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1100);
+                this.camera.target = new THREE.Vector3(0, 0, 0);
+
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                document.getElementById('canvas-container').appendChild(this.renderer.domElement);
+
+                this.cssRenderer = new CSS3DRenderer();
+                this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
+                document.getElementById('css3d-container').appendChild(this.cssRenderer.domElement);
+
+                // Setup Main Sphere with Transition Shader
+                const geometry = new THREE.SphereGeometry(500, 60, 40);
+                geometry.scale(-1, 1, 1);
+
+                this.material = new THREE.ShaderMaterial({
+                    uniforms: {
+                        uTex1: { value: new THREE.Texture() },
+                        uTex2: { value: new THREE.Texture() },
+                        uProgress: { value: 0 },
+                        uOpacity: { value: 1 }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() {
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        varying vec2 vUv;
+                        uniform sampler2D uTex1;
+                        uniform sampler2D uTex2;
+                        uniform float uProgress;
+                        uniform float uOpacity;
+                        void main() {
+                            vec4 t1 = texture2D(uTex1, vUv);
+                            vec4 t2 = texture2D(uTex2, vUv);
+                            gl_FragColor = mix(t1, t2, uProgress);
+                            gl_FragColor.a *= uOpacity;
+                        }
+                    `,
+                    transparent: true
+                });
+
+                this.mesh = new THREE.Mesh(geometry, this.material);
+                this.scene.add(this.mesh);
+
+                // Interaction state
+                this.lon = this.data.settings.start_yaw || 0;
+                this.lat = this.data.settings.start_pitch || 0;
+                this.phi = 0;
+                this.theta = 0;
+                this.isUserInteracting = false;
+            }
+
+            initEventListeners() {
+                const onPointerDown = (e) => {
+                    this.isUserInteracting = true;
+                    this.pointerX = e.clientX;
+                    this.pointerY = e.clientY;
+                    this.pointerLon = this.lon;
+                    this.pointerLat = this.lat;
+                };
+
+                const onPointerMove = (e) => {
+                    if (this.isUserInteracting) {
+                        this.lon = (this.pointerX - e.clientX) * 0.1 + this.pointerLon;
+                        this.lat = (e.clientY - this.pointerY) * 0.1 + this.pointerLat;
+                    }
+                };
+
+                const onPointerUp = () => { this.isUserInteracting = false; };
+
+                const onWheel = (e) => {
+                    this.camera.fov += e.deltaY * 0.05;
+                    this.camera.fov = Math.max(10, Math.min(100, this.camera.fov));
+                    this.camera.updateProjectionMatrix();
+                };
+
+                window.addEventListener('pointerdown', onPointerDown);
+                window.addEventListener('pointermove', onPointerMove);
+                window.addEventListener('pointerup', onPointerUp);
+                window.addEventListener('wheel', onWheel);
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+
+            async loadScene(sceneId, entryPitch = null, entryYaw = null) {
+                const sceneData = this.data.scenes.find(s => s.id === sceneId);
+                if (!sceneData) return;
+
+                document.getElementById('scene-title').textContent = sceneData.name.toUpperCase();
+                
+                const loader = new THREE.TextureLoader();
+                const url = `/galleries/${this.data.id}/${sceneId}/${sceneData.web || sceneData.panorama}`;
+                
+                const newTexture = await loader.loadAsync(url);
+                newTexture.colorSpace = THREE.SRGBColorSpace;
+
+                if (this.currentSceneId) {
+                    // Start Transition
+                    this.material.uniforms.uTex2.value = newTexture;
+                    gsap.to(this.material.uniforms.uProgress, {
+                        value: 1,
+                        duration: 1.2,
+                        ease: "power2.inOut",
+                        onComplete: () => {
+                            const oldTex = this.material.uniforms.uTex1.value;
+                            if (oldTex) oldTex.dispose();
+                            this.material.uniforms.uTex1.value = newTexture;
+                            this.material.uniforms.uProgress.value = 0;
+                        }
+                    });
+                } else {
+                    this.material.uniforms.uTex1.value = newTexture;
+                    document.getElementById('loading').style.opacity = '0';
+                    setTimeout(() => document.getElementById('loading').remove(), 500);
+                }
+
+                this.currentSceneId = sceneId;
+                if (entryPitch !== null) this.lat = entryPitch;
+                if (entryYaw !== null) this.lon = entryYaw;
+                
+                this.updateHotspots(sceneData.hotspots);
+            }
+
+            updateHotspots(hotspots) {
+                while(this.cssScene.children.length > 0) {
+                    this.cssScene.remove(this.cssScene.children[0]);
+                }
+
+                hotspots.forEach(hs => {
+                    const el = document.createElement('div');
+                    el.className = 'hotspot-arrow';
+                    el.onclick = () => this.loadScene(hs.target_id, hs.entry_pitch, hs.entry_yaw);
+                    
+                    const obj = new CSS3DObject(el);
+                    
+                    const p = THREE.MathUtils.degToRad(hs.pitch);
+                    const y = THREE.MathUtils.degToRad(hs.yaw);
+                    
+                    if (hs.pitch < -20) {
+                        // Floor arrow
+                        const H = 120;
+                        const r = H / Math.tan(-p);
+                        obj.position.set(r * Math.sin(y), -H, r * Math.cos(y));
+                        obj.rotation.x = -Math.PI / 2;
+                        obj.rotation.z = -y; // Point arrow toward target
+                    } else {
+                        // Wall icon
+                        const R = 480;
+                        obj.position.set(R * Math.cos(p) * Math.sin(y), R * Math.sin(p), R * Math.cos(p) * Math.cos(y));
+                        obj.lookAt(0, 0, 0);
+                    }
+                    this.cssScene.add(obj);
+                });
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                if (!this.isUserInteracting) {
+                    // Auto-rotation or easing can go here
+                }
+
+                this.lat = Math.max(-85, Math.min(85, this.lat));
+                this.phi = THREE.MathUtils.degToRad(90 - this.lat);
+                this.theta = THREE.MathUtils.degToRad(this.lon);
+
+                this.camera.target.x = 500 * Math.sin(this.phi) * Math.cos(this.theta);
+                this.camera.target.y = 500 * Math.cos(this.phi);
+                this.camera.target.z = 500 * Math.sin(this.phi) * Math.sin(this.theta);
+
+                this.camera.lookAt(this.camera.target);
+                this.renderer.render(this.scene, this.camera);
+                this.cssRenderer.render(this.cssScene, this.camera);
+            }
+
+            start() {
+                const startId = this.data.settings.start_scene_id || this.data.scenes[0].id;
+                this.loadScene(startId);
+                this.animate();
+            }
+        }
+
+        window.ViewerInstance = new AdvancedViewer();
+    </script>
+</body>
+</html>

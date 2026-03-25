@@ -127,19 +127,25 @@ def serialize_tour(row):
     }
 
 def serialize_scene(row):
+    from backend.core.config import WEB_PANO_FILENAME
+    full_web_pano = None
     studio_web_pano = None
     try:
         pano_name = row["panorama_path"]
         if pano_name:
+            # check if 6k full web exists
+            full_web_pano = ensure_scene_web_pano(row["tour_id"], row["id"], pano_name, WEB_PANO_FILENAME)
+            # check if 4k studio web exists
             studio_web_pano = ensure_scene_studio_web_pano(row["tour_id"], row["id"], pano_name)
     except Exception:
-        studio_web_pano = None
+        pass
     return {
         "id": row["id"],
         "tour_id": row["tour_id"],
         "name": row["title"],
         "panorama": row["panorama_path"],
-        "web": studio_web_pano,
+        "web": full_web_pano or studio_web_pano,
+        "studio_web": studio_web_pano,
         "preview": row["preview_path"],
         "images": json.loads(row["images_json"] or "[]"),
         "haov": row["haov"],
