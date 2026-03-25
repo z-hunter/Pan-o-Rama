@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Dashboard - Lokalny Obiektyw</title>
-  <link rel="stylesheet" href="/css/main.css?v=6" />
+  <link rel="stylesheet" href="/css/main.css?v=7" />
   <style>
     body {
       background-image: none !important; /* Remove giant logo */
@@ -34,19 +34,13 @@
       align-items: flex-end;
     }
 
-    /* Fixed Grid: 3 columns on desktop */
+    /* Fixed Grid: Center items and prevent stretching */
     #tours-grid {
       display: grid;
-      gap: 24px;
-      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+      grid-template-columns: repeat(auto-fill, 340px);
+      justify-content: center;
       margin-top: 40px;
-    }
-    
-    @media (max-width: 1200px) {
-      #tours-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 800px) {
-      #tours-grid { grid-template-columns: 1fr; }
     }
 
     .tour-card {
@@ -122,6 +116,7 @@
       
       <nav class="nav-links">
         <a href="/dashboard.html" class="nav-link active">Tours</a>
+        <a href="/projects.html" class="nav-link">Gallery</a>
         <a href="/account.html" class="nav-link">Account</a>
         <button class="btn btn-ghost btn-sm" style="opacity: 0.5;" onclick="logout()">Logout</button>
       </nav>
@@ -132,7 +127,7 @@
     <div class="flex justify-between items-end">
       <div>
         <h1 style="font-size: 28px; color: var(--text);">Project Library</h1>
-        <p class="label-technical" style="margin-top: 8px;">Operator: <span id="user-name" style="color: var(--text);">...</span></p>
+        <p class="label-technical" style="margin-top: 8px;">User: <span id="user-name" style="color: var(--text);">...</span></p>
       </div>
       <button class="btn btn-primary" onclick="showCreateModal()">
         + NEW TOUR
@@ -146,26 +141,26 @@
 
   <div id="create-modal" class="modal-overlay" onclick="closeCreateModal()">
     <div class="modal-content card" style="max-width: 400px;" onclick="event.stopPropagation()">
-      <h2 class="mb-8">Initialize Sequence</h2>
+      <h2 class="mb-8">New Tour</h2>
       <form onsubmit="handleCreateTour(event)">
         <div class="mb-6">
-          <label class="label-technical block mb-2">Identifier</label>
-          <input id="title" placeholder="SEQUENCE_NAME" required />
+          <label class="label-technical block mb-2">Tour Name</label>
+          <input id="title" placeholder="e.g. My Apartment" required />
         </div>
         <div class="mb-6">
           <label class="label-technical block mb-2">Description</label>
           <textarea id="description" rows="2"></textarea>
         </div>
         <div class="mb-10">
-          <label class="label-technical block mb-2">Access Protocol</label>
+          <label class="label-technical block mb-2">Privacy Settings</label>
           <select id="visibility">
-            <option value="public">Public_Access</option>
-            <option value="private">Restricted_Mode</option>
+            <option value="public">Public</option>
+            <option value="private">Private</option>
           </select>
         </div>
         <div class="flex gap-4">
-          <button type="button" class="btn btn-secondary" style="flex:1;" onclick="closeCreateModal()">ABORT</button>
-          <button type="submit" class="btn btn-primary" style="flex:1;">COMMENCE</button>
+          <button type="button" class="btn btn-secondary" style="flex:1;" onclick="closeCreateModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="flex:1;">Create</button>
         </div>
       </form>
     </div>
@@ -179,7 +174,7 @@
       const out = await apiFetch('/me');
       if (!out || !out.res.ok) return;
       const u = out.data;
-      document.getElementById('user-name').textContent = u.display_name?.toUpperCase() || 'ROOT';
+      document.getElementById('user-name').textContent = u.display_name?.toUpperCase() || 'USER';
       const plan = u.plan || {};
       const ent = u.entitlements || {};
       const usage = u.usage || {};
@@ -193,12 +188,12 @@
 
     async function loadTours() {
       const grid = document.getElementById('tours-grid');
-      grid.innerHTML = '<div class="label-technical">Synchronizing data stream...</div>';
+      grid.innerHTML = '<div class="label-technical">Loading tours...</div>';
       const out = await apiFetch('/tours/my');
       if (!out || !out.res.ok) return;
       const tours = out.data.tours || [];
       if (tours.length === 0) {
-        grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">NULL_RESULT: NO ACTIVE SEQUENCES FOUND.</div>';
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">You haven\'t created any tours yet.</div>';
         return;
       }
       grid.innerHTML = '';
@@ -209,13 +204,13 @@
         card.innerHTML = `
           <div class="tour-thumb" style="background-image: url('${t.cover_image || '/img/placeholder.png'}')">
             <div style="position: absolute; top: 12px; right: 12px;">
-              <span class="badge ${isPrivate?'':'badge-success'}">${isPrivate?'[RESTRICTED]':'[PUBLIC]'}</span>
+              <span class="badge ${isPrivate?'':'badge-success'}">${isPrivate?'[PRIVATE]':'[PUBLIC]'}</span>
             </div>
           </div>
           <div class="tour-content">
             <h3 class="mb-2" style="font-size: 16px;">${t.title}</h3>
             <p class="muted mono" style="font-size: 11px; flex: 1; margin-bottom: 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
-              ${t.description || 'NO_METADATA'}
+              ${t.description || 'No description provided.'}
             </p>
             <div class="tour-actions">
               <button class="btn btn-primary btn-sm" onclick="openStudio('${t.id}')">STUDIO</button>
@@ -224,7 +219,7 @@
           </div>
           <div class="tour-footer">
             <span class="label-technical" style="font-size: 9px; opacity: 0.5;">ID: ${t.slug.slice(0,10)}</span>
-            <button class="btn btn-ghost btn-sm" style="color: var(--danger); font-size: 10px; border: 0; padding: 0;" onclick="deleteTour('${t.id}')">[PURGE]</button>
+            <button class="btn btn-ghost btn-sm" style="color: var(--danger); font-size: 10px; border: 0; padding: 0;" onclick="deleteTour('${t.id}')">[DELETE]</button>
           </div>
         `;
         grid.appendChild(card);
@@ -236,14 +231,35 @@
 
     async function handleCreateTour(e) {
       e.preventDefault();
-      const out = await apiFetch('/tours', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: document.getElementById('title').value.trim(), description: document.getElementById('description').value.trim(), visibility: document.getElementById('visibility').value }) });
-      if (out && out.res.ok) { showToast('SEQUENCE_INITIALIZED'); closeCreateModal(); init(); }
+      console.log("Creating tour...");
+      try {
+        const out = await apiFetch('/tours', { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ 
+            title: document.getElementById('title').value.trim(), 
+            description: document.getElementById('description').value.trim(), 
+            visibility: document.getElementById('visibility').value 
+          }) 
+        });
+        console.log("Create response:", out);
+        if (out && out.res.ok) { 
+          showToast('Tour Created', 'success'); 
+          closeCreateModal(); 
+          init(); 
+        } else {
+          showToast(out?.data?.error || 'Failed to create tour', 'error');
+        }
+      } catch (err) {
+        console.error("Create error:", err);
+        showToast("System error during creation", "error");
+      }
     }
 
     async function deleteTour(id) {
-      if (!confirm('CONFIRM_PURGE?')) return;
+      if (!confirm('Are you sure you want to delete this tour?')) return;
       const out = await apiFetch(`/tours/${id}`, { method: 'DELETE' });
-      if (out && out.res.ok) { showToast('PURGE_COMPLETE'); loadTours(); }
+      if (out && out.res.ok) { showToast('Tour Deleted'); loadTours(); }
     }
 
     function openStudio(id) { window.location.href = `/?tour_id=${encodeURIComponent(id)}`; }

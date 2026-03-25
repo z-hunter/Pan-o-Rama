@@ -80,11 +80,12 @@
 <body>
   <header class="header">
     <div class="logo">
-      <img src="/img/logo.png" alt="LO" />
+      <img src="/img/logo.png" alt="LO" style="height: 32px; width: auto;" />
       <span>USER_PROFILE</span>
     </div>
     <nav class="nav-links">
       <a href="/dashboard.html" class="nav-link">Tours</a>
+      <a href="/projects.html" class="nav-link">Gallery</a>
       <a href="/account.html" class="nav-link active">Account</a>
       <button class="btn btn-ghost btn-sm" onclick="logout()">LOGOUT</button>
     </nav>
@@ -94,7 +95,7 @@
     <div class="settings-grid">
       <!-- Profile -->
       <section>
-        <h2 class="section-title">Identity</h2>
+        <h2 class="section-title">Profile</h2>
         <div class="card">
           <form onsubmit="handleUpdateProfile(event)">
             <div class="mb-4">
@@ -102,10 +103,10 @@
               <input id="email" type="email" disabled style="opacity: 0.5;" />
             </div>
             <div class="mb-6">
-              <label class="block mb-1">Display Name</label>
-              <input id="displayName" placeholder="OPERATOR_NAME" required />
+              <label class="block mb-1">Your Name</label>
+              <input id="displayName" placeholder="John Doe" required />
             </div>
-            <button type="submit" class="btn btn-primary" style="width: 100%;">Sync Profile</button>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Save Profile</button>
           </form>
         </div>
       </section>
@@ -116,21 +117,21 @@
         <div class="card">
           <form onsubmit="handleUpdatePassword(event)">
             <div class="mb-4">
-              <label class="block mb-1">Current Passkey</label>
+              <label class="block mb-1">Current Password</label>
               <input id="currentPassword" type="password" required />
             </div>
             <div class="mb-4">
-              <label class="block mb-1">New Passkey</label>
+              <label class="block mb-1">New Password</label>
               <input id="newPassword" type="password" required minlength="8" />
             </div>
-            <button type="submit" class="btn btn-secondary" style="width: 100%;">Update Credentials</button>
+            <button type="submit" class="btn btn-secondary" style="width: 100%;">Change Password</button>
           </form>
         </div>
       </section>
     </div>
 
     <section>
-      <h2 class="section-title">Tier Management</h2>
+      <h2 class="section-title">Subscription Plan</h2>
       <div class="plan-grid">
         
         <div class="plan-card" id="plan-free">
@@ -143,7 +144,7 @@
               <li>Standard Resolution</li>
             </ul>
           </div>
-          <button class="btn btn-ghost" disabled>ACTIVE_TIER</button>
+          <button class="btn btn-ghost" disabled>Current Plan</button>
         </div>
 
         <div class="plan-card" id="plan-pro">
@@ -157,7 +158,7 @@
               <li>Priority Support</li>
             </ul>
           </div>
-          <button class="btn btn-primary" onclick="upgrade('pro')">UPGRADE_TO_PRO</button>
+          <button class="btn btn-primary" onclick="upgrade('pro')">Upgrade to Pro</button>
         </div>
 
         <div class="plan-card" id="plan-business">
@@ -171,7 +172,7 @@
               <li>Direct API Access</li>
             </ul>
           </div>
-          <button class="btn btn-primary" onclick="upgrade('business')">UPGRADE_TO_BIZ</button>
+          <button class="btn btn-primary" onclick="upgrade('business')">Upgrade to Business</button>
         </div>
 
       </div>
@@ -194,7 +195,7 @@
       if (activeCard) {
         activeCard.classList.add('active');
         const btn = activeCard.querySelector('button');
-        btn.textContent = 'CURRENT_ACTIVE_TIER';
+        btn.textContent = 'Current Plan';
         btn.disabled = true;
         btn.className = 'btn btn-ghost';
       }
@@ -208,8 +209,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: displayName })
       });
-      if (out && out.res.ok) showToast('PROFILE_SYNCHRONIZED');
-      else showToast(out?.data?.error || 'FAILURE', 'error');
+      if (out && out.res.ok) showToast('Profile saved successfully');
+      else showToast(out?.data?.error || 'Update failed', 'error');
     }
 
     async function handleUpdatePassword(e) {
@@ -222,15 +223,26 @@
         body: JSON.stringify({ current_password, new_password })
       });
       if (out && out.res.ok) {
-        showToast('CREDENTIALS_UPDATED');
+        showToast('Password changed successfully');
         e.target.reset();
       } else {
-        showToast(out?.data?.error || 'FAILURE', 'error');
+        showToast(out?.data?.error || 'Update failed', 'error');
       }
     }
 
-    function upgrade(plan) {
-      showToast(`REDIRECTING_TO_${plan.toUpperCase()}_CHECKOUT...`, 'info');
+    async function upgrade(plan) {
+      showToast(`Processing upgrade to ${plan.toUpperCase()}...`, 'info');
+      const out = await apiFetch('/billing/mock/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: plan })
+      });
+      if (out && out.res.ok) {
+        showToast('Plan upgraded successfully!', 'success');
+        init(); // refresh UI
+      } else {
+        showToast(out?.data?.error || 'Upgrade failed', 'error');
+      }
     }
 
     init();

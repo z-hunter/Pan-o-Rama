@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css"/>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        body { flex-direction: row; background-color: var(--bg-app); }
+        body { flex-direction: row; background-color: var(--bg-app); overflow: hidden; }
         
         .sidebar {
             width: 340px; min-width: 340px; height: 100vh;
@@ -80,78 +80,78 @@
                 </div>
                 <div id="scenesList" class="mb-8"></div>
                 <div class="card" style="background-color: var(--bg-app);">
-                    <h4 class="mb-6">Upload Engine</h4>
+                    <h4 class="mb-6">Upload Panoramas</h4>
                     <div class="mb-6">
-                        <label class="label-technical block mb-2">Identifier</label>
-                        <input type="text" id="sceneName" placeholder="SCAN_DATA_01">
+                        <label class="label-technical block mb-2">Scene Name</label>
+                        <input type="text" id="sceneName" placeholder="e.g., Living Room">
                     </div>
                     <div class="mb-6">
-                        <label class="label-technical block mb-2">Source Assets</label>
+                        <label class="label-technical block mb-2">Source Image</label>
                         <input type="file" id="sceneFiles" multiple accept="image/*">
                     </div>
                     <div class="mb-8 flex items-center gap-2">
                         <input type="checkbox" id="isPano" style="width:auto;" checked>
-                        <label for="isPano" class="label-technical">Spherical Mapping</label>
+                        <label for="isPano" class="label-technical">360° Panorama</label>
                     </div>
-                    <button class="btn btn-primary" style="width:100%;" id="addBtn" onclick="addScene()">Process Stream</button>
+                    <button class="btn btn-primary" style="width:100%;" id="addBtn" onclick="addScene()">Upload & Process</button>
                 </div>
             </div>
 
             <div id="panel-tour" class="tab-panel">
                 <div id="tour-empty-state" class="empty-state">
-                    NO_DATA_LINKED<br>AWAITING_ASSET_INGESTION
+                    NO SCENES UPLOADED<br>Please upload scenes to configure tour.
                 </div>
                 <div id="tour-controls" style="display:none;">
-                    <h3 class="mb-6">Topology</h3>
-                    <button class="btn mb-6" style="width:100%;" onclick="startLinking()">Node Mapping Mode</button>
+                    <h3 class="mb-6">Tour Connections</h3>
+                    <button class="btn mb-6" style="width:100%;" onclick="startLinking()">Add Hotspot</button>
                     <div id="portalForm" style="display:none;" class="card mb-6" style="background-color: var(--bg-app);">
-                        <label class="label-technical block mb-2">Target Node</label>
+                        <label class="label-technical block mb-2">Target Scene</label>
                         <select id="targetScene" class="mb-4"></select>
-                        <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Establish Link</button>
+                        <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Save Hotspot</button>
                     </div>
                     <div class="card mb-6" style="background-color: var(--bg-app);">
-                        <label class="label-technical block mb-2">Inbound Vectors</label>
+                        <label class="label-technical block mb-2">Incoming Links</label>
                         <select id="incomingLinkSelect" class="mb-4"></select>
-                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Fix Entry Vector</button>
+                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Set Entry View</button>
                     </div>
-                    <h3 class="mt-8 mb-6">Orientation</h3>
-                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set Origin View</button>
+                    <h3 class="mt-8 mb-6">Starting Point</h3>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set Current View as Start</button>
                 </div>
             </div>
 
             <div id="panel-sharing" class="tab-panel">
-                <h3 class="mb-6">Deployment</h3>
+                <h3 class="mb-6">Publish & Share</h3>
                 <div class="card mb-6" style="background-color: var(--bg-app);">
-                    <label class="label-technical block mb-2">Access Protocol</label>
+                    <label class="label-technical block mb-2">Privacy Settings</label>
                     <select id="tourVisibility" class="mb-6">
-                        <option value="public">Public_Access</option>
-                        <option value="private">Restricted_Mode</option>
+                        <option value="public">Public</option>
+                        <option value="private">Private</option>
                     </select>
-                    <button class="btn btn-primary" style="width:100%;" onclick="finalizeTour()">Publish to Mainnet</button>
+                    <button class="btn btn-primary" style="width:100%;" onclick="finalizeTour()">Publish Tour</button>
                 </div>
                 <div class="card mb-6" style="background-color: var(--bg-app);">
-                    <h4 class="mb-4">Export Modules</h4>
-                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="downloadFacebook360FirstScene()">FB_360_EXPORT</button>
-                    <button class="btn btn-secondary btn-sm" style="width:100%;" id="exportSelfHostedBtn" onclick="exportSelfHostedPackage()">SELF_HOST_PACKAGE</button>
-                    <button class="btn btn-primary btn-sm mt-2" id="upgradeBusinessBtn" style="display:none; width:100%;" onclick="window.location.href='/account'">Unlock_Exports</button>
+                    <h4 class="mb-4">Export Options</h4>
+                    <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="downloadFacebook360FirstScene()">Download Facebook 360</button>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" id="exportSelfHostedBtn" onclick="exportSelfHostedPackage()">Download ZIP (Self-Host)</button>
+                    <button class="btn btn-primary btn-sm mt-2" id="upgradeBusinessBtn" style="display:none; width:100%;" onclick="window.location.href='/account'">Upgrade to Business Plan</button>
                 </div>
                 <div class="card" style="background-color: var(--bg-app);">
-                    <label class="label-technical block mb-2">Resource Link</label>
-                    <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="copyFullTourShareLink()">Copy_Pointer_URL</button>
+                    <label class="label-technical block mb-2">Share Link</label>
+                    <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="copyFullTourShareLink()">Copy Link</button>
                 </div>
             </div>
         </div>
 
         <div id="step1" style="padding: 32px 24px; background-color: var(--bg-sidebar); border-top: 1px solid rgba(72, 72, 71, 0.15);">
-            <button class="btn btn-primary" style="width: 100%;" onclick="createProject()">New Sequence</button>
+            <button class="btn btn-primary" style="width: 100%;" onclick="createProject()">Create New Tour</button>
         </div>
     </aside>
 
     <div class="main-stage">
         <header class="header">
             <div class="logo">
-                <img src="/img/logo.png" alt="LO" />
-                <span>TOUR_STUDIO_v3</span>
+                <img src="/img/logo.png" alt="LO" style="height: 24px;" />
+                <span>TOUR STUDIO</span>
             </div>
             <nav class="nav-links">
                 <a href="/dashboard.html" class="nav-link">Dashboard</a>
@@ -165,13 +165,13 @@
             <div id="top-progress"><div id="top-progress-fill"></div></div>
             <div id="step1-workspace" style="display: flex; align-items:center; justify-content: center; height: 100%; background: #050505;">
                 <div style="text-align: center; max-width: 500px;">
-                    <h2 class="mb-4" style="color: var(--primary);">Ready for Input</h2>
-                    <p class="muted mono" style="font-size: 12px;">Initialize a project or select a tour from the dashboard to begin operational sequence.</p>
+                    <h2 class="mb-4" style="color: var(--primary);">Welcome to Tour Studio</h2>
+                    <p class="muted mono" style="font-size: 12px;">Create a new tour or select an existing one from the dashboard to begin editing.</p>
                 </div>
             </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
             <div class="hud card" id="editorHud" style="display:none; pointer-events: none; position: absolute; top: 20px; right: 20px;">
-                <div id="coords" style="font-family: var(--font-mono); font-size: 11px; color: var(--primary);">P: 0.00 | Y: 0.00</div>
+                <div id="coords" style="font-family: var(--font-mono); font-size: 11px; color: var(--primary);">Pitch: 0.00° | Yaw: 0.00°</div>
             </div>
         </main>
     </div>

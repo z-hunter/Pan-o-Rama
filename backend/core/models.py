@@ -2,6 +2,7 @@ import datetime
 import json
 import re
 import os
+import secrets
 from PIL import Image, ImageOps
 
 # Helper to avoid circular imports - config can be imported directly

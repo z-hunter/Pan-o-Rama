@@ -34,7 +34,6 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 h1, h2, h3, h4 { 
@@ -53,7 +52,7 @@ label, .label-technical {
   letter-spacing: 0.1em;
 }
 
-/* Button Component: Amber Warning Glow */
+/* Base Button */
 button, .btn {
   display: inline-flex;
   align-items: center;
@@ -74,37 +73,44 @@ button, .btn {
 
 button:hover, .btn:hover { 
   background: rgba(245, 158, 11, 0.1); 
-  color: var(--text);
+  color: var(--primary);
 }
 
+/* Primary Button */
 .btn-primary { 
   background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dim) 100%);
   color: var(--on-primary);
 }
 .btn-primary:hover { 
-  filter: brightness(1.1);
-  box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+  background: linear-gradient(135deg, #fbbf24 0%, var(--primary) 100%);
   color: var(--on-primary);
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
 }
 
+/* Secondary Button */
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-muted);
 }
 .btn-secondary:hover {
+  background: transparent;
   border-color: var(--primary);
   color: var(--primary);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.1);
 }
 
+/* Danger Button */
 .btn-danger {
   color: #ef4444;
 }
 .btn-danger:hover {
   background: rgba(239, 68, 68, 0.1);
   color: #ff716c;
+  box-shadow: none;
 }
 
+/* Ghost Button */
 .btn-ghost { 
   background: transparent; 
   color: var(--text-muted); 
@@ -112,6 +118,7 @@ button:hover, .btn:hover {
 .btn-ghost:hover { 
   color: var(--primary);
   background: rgba(38, 38, 38, 0.4);
+  box-shadow: none;
 }
 
 /* Data-Density Inputs */
@@ -129,6 +136,13 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-bottom: 2px solid var(--primary);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 32px;
+  width: 100%;
 }
 
 .card {
