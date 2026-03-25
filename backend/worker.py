@@ -2,8 +2,10 @@ import os
 import sys
 import traceback
 import json
+import uuid
 from redis import Redis
-from rq import Worker, Queue
+from rq import Worker, Queue, Connection
+from flask import Flask, g
 
 # Add current dir to path to allow absolute imports
 sys.path.append(os.getcwd())
@@ -14,18 +16,17 @@ from backend.core.models import now_iso
 from backend.services.job_service import update_job_status, get_job
 from backend.services.scene_service import process_scene_from_raw_paths
 
-def process_job_task(jid):
-    # ... (function body remains the same)
+# Create a minimal app-like context for DB access if needed
+app = Flask(__name__)
 
+def process_job_task(jid):
+    """
     Entrypoint for RQ worker.
     """
-    # Create a minimal app-like context for DB access if needed
-    # (Since we use get_db() which relies on Flask 'g', we might need to mock 'g' or use a different approach)
-    # For background tasks, it's better to avoid 'g' and use direct DB connections.
-    
-    from flask import Flask, g
-    app = Flask(__name__)
     with app.app_context():
+        # Setup 'g' for DB access if used by core services
+        g.current_user = None
+        
         job = get_job(jid)
         if not job:
             print(f"Job {jid} not found in DB")
