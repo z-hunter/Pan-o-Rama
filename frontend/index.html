@@ -170,9 +170,6 @@
                 </div>
             </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
-            <div class="hud card" id="editorHud" style="display:none; pointer-events: none; position: absolute; top: 20px; right: 20px;">
-                <div id="coords" style="font-family: var(--font-mono); font-size: 11px; color: var(--primary);">Pitch: 0.00° | Yaw: 0.00°</div>
-            </div>
         </main>
     </div>
 
@@ -235,6 +232,9 @@
                 window.history.replaceState({}, '', `/?tour_id=${projectId}`);
                 document.getElementById('step1').style.display = 'none';
                 switchTab('scenes');
+            } else {
+                const errMsg = (out && out.data && out.data.error) ? out.data.error : "Failed to create tour on server.";
+                showToast(errMsg, "error");
             }
             setLoading(false);
         }
@@ -242,8 +242,14 @@
         async function addScene() {
             const name = document.getElementById('sceneName').value;
             const files = document.getElementById('sceneFiles').files;
-            if (!projectId || !name || files.length === 0) return showToast("Missing Data", "error");
             
+            if (!name || files.length === 0) return showToast("Missing Data: Please select an image and provide a scene name.", "error");
+            
+            if (!projectId) {
+                await createProject();
+                if (!projectId) return showToast("Failed to create tour", "error");
+            }
+
             const formData = new FormData();
             formData.append('scene_name', name);
             formData.append('is_panorama', document.getElementById('isPano').checked ? 'true' : 'false');
@@ -255,6 +261,9 @@
                 if (out.data.scene) scenes.push(out.data.scene);
                 updateScenesUI();
                 if (out.data.job_id) pollJobUntilTerminal(out.data.job_id, { refreshTourOnDone: true });
+            } else {
+                const errMsg = (out && out.data && out.data.error) ? out.data.error : "Failed to upload scene due to server error.";
+                showToast(errMsg, "error");
             }
             setLoading(false);
         }
@@ -328,7 +337,6 @@
             if (viewer) viewer.destroy();
             document.getElementById('step1-workspace').style.display = 'none';
             document.getElementById('pano-editor').style.display = 'block';
-            document.getElementById('editorHud').style.display = 'block';
             viewer = pannellum.viewer('pano-editor', config);
             viewer.on('mousedown', (e) => {
                 const c = viewer.mouseEventToCoords(e); lastClickCoords = c;
@@ -344,7 +352,6 @@
             if (viewer) viewer.destroy();
             document.getElementById('pano-editor').style.display = 'none';
             document.getElementById('step1-workspace').style.display = 'flex';
-            document.getElementById('editorHud').style.display = 'none';
         }
 
         async function savePortal() {
@@ -359,6 +366,7 @@
         }
 
         async function finalizeTour() {
+            if (!projectId) return showToast("No tour created yet! Upload a scene first.", "error");
             setLoading(true, "Publishing...");
             const hs = {}; scenes.forEach(s => hs[s.id] = s.hotspots || []);
             await apiFetch(`/tours/${projectId}/hotspots/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(hs) });

@@ -4,7 +4,7 @@ import traceback
 import json
 import uuid
 from redis import Redis
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 from flask import Flask, g
 
 # Add current dir to path to allow absolute imports
@@ -81,10 +81,9 @@ def process_job_task(jid):
 def main():
     print(f"Connecting to Redis at {REDIS_URL}...")
     redis_conn = Redis.from_url(REDIS_URL)
-    with Connection(redis_conn):
-        worker = Worker([QUEUE_NAME])
-        print(f"Worker listening on queue: {QUEUE_NAME}")
-        worker.work()
+    worker = Worker([QUEUE_NAME], connection=redis_conn)
+    print(f"Worker listening on queue: {QUEUE_NAME}")
+    worker.work()
 
 if __name__ == "__main__":
     main()

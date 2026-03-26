@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Lokalny Obiektyw - Tour</title>
+    <meta name="lokalny_obiektyw_gallery_template" content="legacy-pannellum">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+        #panorama {
+            width: 100vw;
+            height: 100vh;
+            background: #050505;
+        }
+        .custom-hotspot {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: 3px solid rgba(255, 255, 255, 0.9);
+            background: rgba(245, 158, 11, 0.4);
+            box-shadow: 0 0 18px rgba(0, 0, 0, 0.45);
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+        .custom-hotspot::after {
+            content: "";
+            display: block;
+            width: 13px;
+            height: 13px;
+            margin: 12px auto 0;
+            border-top: 4px solid #fff;
+            border-right: 4px solid #fff;
+            transform: rotate(45deg);
+        }
+        .custom-hotspot:hover {
+            transform: scale(1.08);
+            background: rgba(245, 158, 11, 0.7);
+        }
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {
+            display: none !important;
+        }
+        .scene-nav {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 9999;
+        }
+        .scene-nav-btn {
+            width: 44px;
+            height: 44px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .scene-nav-menu {
+            display: none;
+            margin-top: 8px;
+            width: min(320px, 80vw);
+            max-height: 50vh;
+            overflow: auto;
+            background: rgba(8, 8, 8, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            padding: 8px;
+        }
+        .scene-nav-menu.open {
+            display: block;
+        }
+        .scene-nav-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .scene-nav-item:hover {
+            background: rgba(245, 158, 11, 0.2);
+        }
+        .scene-pill {
+            color: #f59e0b;
+            font-size: 11px;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            padding: 3px 8px;
+        }
+        .wm-badge {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            z-index: 9999;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            color: #fff;
+            font-size: 12px;
+        }
+        .wm-badge.show {
+            display: inline-flex;
+        }
+        .wm-badge img {
+            height: 18px;
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="panorama"></div>
+    <div class="scene-nav">
+        <button id="sceneNavBtn" class="scene-nav-btn" type="button" aria-label="Scenes">S</button>
+        <div id="sceneNavMenu" class="scene-nav-menu"></div>
+    </div>
+    <div id="watermark" class="wm-badge">
+        <img src="/img/logo.png" alt="LO">
+        <span>Lokalny Obiektyw</span>
+    </div>
+
+    <script>
+        /*{{TOUR_DATA}}*/
+
+        const tourData = window.TOUR_DATA || {};
+        const scenes = Array.isArray(tourData.scenes) ? tourData.scenes : [];
+        const settings = tourData.settings || {};
+        let viewer = null;
+
+        function getSceneAsset(scene) {
+            if (!scene) return "";
+            return scene.web || scene.studio_web || scene.panorama || ((scene.images || [])[0]) || "";
+        }
+
+        function buildSceneMap() {
+            const sceneMap = {};
+            scenes.forEach((scene) => {
+                if (!scene || !scene.id) return;
+                const asset = getSceneAsset(scene);
+                if (!asset) return;
+                sceneMap[scene.id] = {
+                    title: scene.name || "Untitled",
+                    type: scene.type || "equirectangular",
+                    panorama: `${scene.id}/${asset}`,
+                    autoLoad: true,
+                    haov: scene.haov || 360,
+                    vaov: scene.vaov || 180,
+                    hotSpots: (scene.hotspots || []).map((hs) => ({
+                        pitch: hs.pitch,
+                        yaw: hs.yaw,
+                        type: "info",
+                        text: hs.target_name || "Open scene",
+                        cssClass: "custom-hotspot",
+                        clickHandlerFunc: () => loadScene(hs.target_id, hs.entry_pitch, hs.entry_yaw)
+                    }))
+                };
+            });
+            return sceneMap;
+        }
+
+        function renderSceneMenu(sceneMap) {
+            const menu = document.getElementById("sceneNavMenu");
+            menu.innerHTML = "";
+            scenes.forEach((scene, index) => {
+                const item = document.createElement("div");
+                item.className = "scene-nav-item";
+                item.innerHTML = `<span>${scene.name || "Untitled"}</span><span class="scene-pill">${index + 1}</span>`;
+                item.addEventListener("click", () => {
+                    loadScene(scene.id);
+                    menu.classList.remove("open");
+                });
+                menu.appendChild(item);
+            });
+        }
+
+        function loadScene(sceneId, pitch = null, yaw = null) {
+            if (!viewer || !sceneId) return;
+            const hfov = viewer.getHfov ? viewer.getHfov() : (settings.default_hfov || 75);
+            viewer.loadScene(sceneId, pitch, yaw, hfov);
+        }
+
+        const sceneMap = buildSceneMap();
+        const firstSceneId = settings.start_scene_id && sceneMap[settings.start_scene_id]
+            ? settings.start_scene_id
+            : (scenes[0] && scenes[0].id);
+
+        const tourConfig = {
+            default: {
+                firstScene: firstSceneId,
+                sceneFadeDuration: 700,
+                autoLoad: true,
+                hfov: settings.default_hfov || 75
+            },
+            scenes: sceneMap
+        };
+
+        viewer = pannellum.viewer("panorama", tourConfig);
+
+        if (typeof settings.start_pitch === "number" || typeof settings.start_yaw === "number") {
+            viewer.on("load", function applyInitialView() {
+                if (viewer.getScene() !== firstSceneId) return;
+                viewer.lookAt(
+                    typeof settings.start_pitch === "number" ? settings.start_pitch : 0,
+                    typeof settings.start_yaw === "number" ? settings.start_yaw : 0,
+                    settings.default_hfov || 75,
+                    0
+                );
+                viewer.off("load", applyInitialView);
+            });
+        }
+
+        if (tourData.watermark) {
+            document.getElementById("watermark").classList.add("show");
+        }
+
+        renderSceneMenu(sceneMap);
+        document.getElementById("sceneNavBtn").addEventListener("click", () => {
+            document.getElementById("sceneNavMenu").classList.toggle("open");
+        });
+    </script>
+</body>
+</html>

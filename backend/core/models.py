@@ -155,6 +155,12 @@ def serialize_scene(row):
         "processing_status": row["processing_status"],
         "processing_error": row["processing_error"],
         "job_id": row["job_id"],
+        "pos": {
+            "x": row["pos_x"] if "pos_x" in row.keys() else 0.0,
+            "y": row["pos_y"] if "pos_y" in row.keys() else 0.0,
+            "z": row["pos_z"] if "pos_z" in row.keys() else 0.0,
+        },
+        "yaw_offset": row["yaw_offset"] if "yaw_offset" in row.keys() else 0.0,
     }
 
 def serialize_job(row):

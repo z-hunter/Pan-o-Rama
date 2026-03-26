@@ -140,6 +140,10 @@ def build_self_hosted_readme(tour):
 def build_self_hosted_eula(tour):
     return "This export is provided for self-hosting. Redistribution or resale of the player code is prohibited."
 
+PUBLIC_PLAYER_TEMPLATE = "player_template_legacy.html"
+# Keep the experimental Three.js player in the repo, but route published tours
+# through the stable Pannellum template until the new viewer is production-ready.
+
 def generate_tour(tour_id, scenes, watermark_enabled=True, force_previews=False, tour_settings=None):
     """
     Generates the static index.html for a tour.
@@ -150,7 +154,7 @@ def generate_tour(tour_id, scenes, watermark_enabled=True, force_previews=False,
     
     # Simplified version of the generation logic
     # In a real app, this would use a template engine (Jinja2)
-    template_path = os.path.join(FRONTEND_FOLDER, "player_template.html")
+    template_path = os.path.join(FRONTEND_FOLDER, PUBLIC_PLAYER_TEMPLATE)
     if not os.path.exists(template_path):
         # Fallback to a very simple internal template if file missing
         html = "<html><body><h1>Tour Player Placeholder</h1></body></html>"
@@ -158,15 +162,18 @@ def generate_tour(tour_id, scenes, watermark_enabled=True, force_previews=False,
         with open(template_path, "r", encoding="utf-8") as f:
             html = f.read()
     
+    settings = dict(tour_settings) if tour_settings is not None else {}
+
     # Inject data
     tour_data = {
         "id": tour_id,
         "scenes": scenes,
         "settings": {
-            "start_scene_id": tour_settings.get("start_scene_id") if tour_settings else None,
-            "start_pitch": tour_settings.get("start_pitch") if tour_settings else 0,
-            "start_yaw": tour_settings.get("start_yaw") if tour_settings else 0,
-            "title": tour_settings.get("title") if tour_settings else "Tour"
+            "start_scene_id": settings.get("start_scene_id"),
+            "start_pitch": settings.get("start_pitch", 0),
+            "start_yaw": settings.get("start_yaw", 0),
+            "default_hfov": settings.get("default_hfov", 75),
+            "title": settings.get("title", "Tour")
         },
         "watermark": watermark_enabled,
         "v": GALLERY_TEMPLATE_VERSION
@@ -176,7 +183,7 @@ def generate_tour(tour_id, scenes, watermark_enabled=True, force_previews=False,
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
     
-    return f"/t/{tour_settings['slug'] if tour_settings else tour_id}"
+    return f"/t/{settings.get('slug', tour_id)}"
 
 def ensure_tour_cover_image(tour_row):
     if tour_row is None:
