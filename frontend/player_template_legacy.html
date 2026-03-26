@@ -3,231 +3,714 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Lokalny Obiektyw - Tour</title>
-    <meta name="lokalny_obiektyw_gallery_template" content="legacy-pannellum">
+    <title>Virtual Tour</title>
+    <meta name="lokalny_obiektyw_gallery_template" content="legacy-pannellum-pre-redesign-v2">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        html, body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #000;
-            font-family: Arial, sans-serif;
-        }
-        #panorama {
-            width: 100vw;
-            height: 100vh;
-            background: #050505;
-        }
+        body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+        #panorama { width: 100vw; height: 100vh; }
         .custom-hotspot {
-            width: 46px;
-            height: 46px;
+            height: 50px;
+            width: 50px;
+            background: rgba(0, 123, 255, 0.4);
+            border: 3px solid #fff;
             border-radius: 50%;
-            border: 3px solid rgba(255, 255, 255, 0.9);
-            background: rgba(245, 158, 11, 0.4);
-            box-shadow: 0 0 18px rgba(0, 0, 0, 0.45);
             cursor: pointer;
-            transition: transform 0.2s ease, background 0.2s ease;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .custom-hotspot::after {
             content: "";
-            display: block;
-            width: 13px;
-            height: 13px;
-            margin: 12px auto 0;
-            border-top: 4px solid #fff;
-            border-right: 4px solid #fff;
-            transform: rotate(45deg);
+            width: 15px;
+            height: 15px;
+            border-top: 5px solid #fff;
+            border-right: 5px solid #fff;
+            transform: rotate(-45deg) translate(-2px, 2px);
         }
         .custom-hotspot:hover {
-            transform: scale(1.08);
-            background: rgba(245, 158, 11, 0.7);
+            background: rgba(0, 123, 255, 0.8);
+            transform: scale(1.2);
+            box-shadow: 0 0 20px #007bff;
         }
-        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg {
-            display: none !important;
-        }
-        .scene-nav {
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg { display: none !important; }
+        .loading-overlay {
             position: fixed;
-            top: 16px;
-            right: 16px;
-            z-index: 9999;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            flex-direction: column;
         }
-        .scene-nav-btn {
-            width: 44px;
+        .loading-title {
+            font: 700 16px/1.2 "Segoe UI", sans-serif;
+            color: #dbeaff;
+        }
+        .loading-progress {
+            width: min(520px, 78vw);
+            margin-top: 12px;
+        }
+        .loading-progress .bar {
+            height: 10px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .loading-progress .fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #4da3ff, #0d6efd);
+            transition: width 160ms ease;
+        }
+        .loading-progress .pct {
+            margin-top: 8px;
+            font: 600 13px/1.2 "Segoe UI", sans-serif;
+            color: #bcd7ff;
+            text-align: center;
+        }
+        .top-controls {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            z-index: 9999;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            pointer-events: auto;
+        }
+        .scene-nav, .quality-nav {
+            position: relative;
+        }
+        .control-btn {
+            min-width: 44px;
             height: 44px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 0 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
             background: rgba(0, 0, 0, 0.55);
-            color: #fff;
-            font-size: 18px;
-            font-weight: 700;
+            color: #e6f1ff;
+            font: 800 14px/1 "Segoe UI", sans-serif;
             cursor: pointer;
         }
+        .control-btn:hover {
+            background: rgba(0, 0, 0, 0.7);
+            border-color: rgba(77, 163, 255, 0.55);
+        }
         .scene-nav-menu {
-            display: none;
-            margin-top: 8px;
-            width: min(320px, 80vw);
+            position: absolute;
+            top: 52px;
+            right: 0;
+            width: min(320px, 78vw);
             max-height: 50vh;
             overflow: auto;
-            background: rgba(8, 8, 8, 0.92);
-            border: 1px solid rgba(255, 255, 255, 0.14);
+            display: none;
+            background: rgba(10, 10, 10, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 12px;
             padding: 8px;
-        }
-        .scene-nav-menu.open {
-            display: block;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
         }
         .scene-nav-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            padding: 10px 12px;
-            color: #fff;
+            padding: 10px 10px;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 14px;
+            color: #d8e8ff;
+            font: 600 14px/1.2 "Segoe UI", sans-serif;
         }
         .scene-nav-item:hover {
-            background: rgba(245, 158, 11, 0.2);
+            background: rgba(77, 163, 255, 0.16);
         }
-        .scene-pill {
-            color: #f59e0b;
-            font-size: 11px;
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            padding: 3px 8px;
+        .scene-nav-item .pill {
+            font: 700 11px/1 "Segoe UI", sans-serif;
+            color: #9fc7ff;
+            border: 1px solid rgba(77, 163, 255, 0.35);
+            background: rgba(0, 0, 0, 0.35);
+            padding: 4px 8px;
+            border-radius: 999px;
         }
         .wm-badge {
             position: fixed;
-            right: 16px;
-            bottom: 16px;
+            bottom: 14px;
+            right: 14px;
+            background: rgba(0, 0, 0, 0.55);
+            color: #d8e8ff;
+            border: 1px solid rgba(77, 163, 255, 0.5);
+            border-radius: 999px;
+            padding: 7px 11px;
+            font: 600 12px/1.2 "Segoe UI", sans-serif;
             z-index: 9999;
+            pointer-events: none;
             display: none;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            color: #fff;
-            font-size: 12px;
         }
-        .wm-badge.show {
-            display: inline-flex;
-        }
-        .wm-badge img {
-            height: 18px;
-            width: auto;
-        }
+        .wm-badge.show { display: block; }
     </style>
 </head>
 <body>
     <div id="panorama"></div>
-    <div class="scene-nav">
-        <button id="sceneNavBtn" class="scene-nav-btn" type="button" aria-label="Scenes">S</button>
-        <div id="sceneNavMenu" class="scene-nav-menu"></div>
+    <div class="top-controls">
+        <div class="quality-nav" id="qualityNav" style="display:none;">
+            <button class="control-btn" id="qualityBtn" type="button" aria-label="Quality">Web</button>
+        </div>
+        <div class="scene-nav" id="sceneNav">
+            <button class="control-btn" id="sceneNavBtn" type="button" aria-label="Scenes">S</button>
+            <div class="scene-nav-menu" id="sceneNavMenu"></div>
+        </div>
     </div>
-    <div id="watermark" class="wm-badge">
-        <img src="/img/logo.png" alt="LO">
-        <span>Lokalny Obiektyw</span>
+    <div class="loading-overlay" id="tourLoader">
+        <div class="loading-title" id="tourLoaderText">Loading scene...</div>
+        <div class="loading-progress">
+            <div class="bar"><div class="fill" id="tourLoaderBar"></div></div>
+            <div class="pct" id="tourLoaderPct">0%</div>
+        </div>
     </div>
+    <div class="wm-badge" id="tourWatermark">Created with Pan-o-Rama Free</div>
 
     <script>
-        /*{{TOUR_DATA}}*/
+    /*{{TOUR_DATA}}*/
 
-        const tourData = window.TOUR_DATA || {};
-        const scenes = Array.isArray(tourData.scenes) ? tourData.scenes : [];
-        const settings = tourData.settings || {};
-        let viewer = null;
+    const QUALITY_STANDARD = "standard";
+    const QUALITY_ULTRA = "ultra";
+    const PREVIEW_SUFFIX = "__preview";
+    const HIRES_SUFFIX = "__ultra";
 
-        function getSceneAsset(scene) {
-            if (!scene) return "";
-            return scene.web || scene.studio_web || scene.panorama || ((scene.images || [])[0]) || "";
+    const sourceData = window.TOUR_DATA || {};
+    const sourceScenes = Array.isArray(sourceData.scenes) ? sourceData.scenes : [];
+    const sourceSettings = sourceData.settings || {};
+    const prefetchCache = new Set();
+    const previewMap = {};
+    const hiresMap = {};
+    const sceneState = {};
+
+    let loadTimer = null;
+    let loadPct = 0;
+    let transitioning = false;
+    let switchReq = null;
+    let qualityMode = QUALITY_STANDARD;
+    let viewerReady = false;
+    let pendingView = null;
+
+    function previewSceneId(baseId) {
+        return `${baseId}${PREVIEW_SUFFIX}`;
+    }
+
+    function hiresSceneId(baseId) {
+        return `${baseId}${HIRES_SUFFIX}`;
+    }
+
+    function isPreviewSceneId(sceneId) {
+        return typeof sceneId === "string" && sceneId.endsWith(PREVIEW_SUFFIX);
+    }
+
+    function isHiresSceneId(sceneId) {
+        return typeof sceneId === "string" && sceneId.endsWith(HIRES_SUFFIX);
+    }
+
+    function baseSceneId(sceneId) {
+        if (!sceneId) return sceneId;
+        return sceneId.replace(PREVIEW_SUFFIX, "").replace(HIRES_SUFFIX, "");
+    }
+
+    function getSceneAsset(scene) {
+        if (!scene) return "";
+        return scene.web || scene.studio_web || scene.panorama || ((scene.images || [])[0]) || "";
+    }
+
+    function getHiresAsset(scene) {
+        if (!scene) return "";
+        return scene.panorama || ((scene.images || [])[0]) || "";
+    }
+
+    function getPreviewAsset(scene) {
+        if (!scene) return "";
+        return scene.preview || "";
+    }
+
+    function setLoader(show, text) {
+        const el = document.getElementById("tourLoader");
+        const t = document.getElementById("tourLoaderText");
+        if (t && text) t.textContent = text;
+        if (!el) return;
+        el.style.display = show ? "flex" : "none";
+        if (!show) {
+            if (loadTimer) {
+                clearInterval(loadTimer);
+                loadTimer = null;
+            }
+            loadPct = 0;
+            setLoaderProgress(0);
         }
+    }
 
-        function buildSceneMap() {
-            const sceneMap = {};
-            scenes.forEach((scene) => {
-                if (!scene || !scene.id) return;
-                const asset = getSceneAsset(scene);
-                if (!asset) return;
-                sceneMap[scene.id] = {
-                    title: scene.name || "Untitled",
-                    type: scene.type || "equirectangular",
-                    panorama: `${scene.id}/${asset}`,
-                    autoLoad: true,
-                    haov: scene.haov || 360,
-                    vaov: scene.vaov || 180,
-                    hotSpots: (scene.hotspots || []).map((hs) => ({
-                        pitch: hs.pitch,
-                        yaw: hs.yaw,
-                        type: "info",
-                        text: hs.target_name || "Open scene",
-                        cssClass: "custom-hotspot",
-                        clickHandlerFunc: () => loadScene(hs.target_id, hs.entry_pitch, hs.entry_yaw)
-                    }))
-                };
+    function setLoaderProgress(pct) {
+        const bar = document.getElementById("tourLoaderBar");
+        const label = document.getElementById("tourLoaderPct");
+        if (!bar || !label) return;
+        const value = Math.max(0, Math.min(100, Math.round(pct)));
+        bar.style.width = `${value}%`;
+        label.textContent = `${value}%`;
+    }
+
+    function beginSceneLoading(text) {
+        setLoader(true, text || "Loading scene...");
+        if (loadTimer) clearInterval(loadTimer);
+        loadPct = Math.max(loadPct, 6);
+        setLoaderProgress(loadPct);
+        loadTimer = setInterval(() => {
+            loadPct += (loadPct < 70 ? 6 : (loadPct < 90 ? 2 : 1));
+            if (loadPct >= 92) loadPct = 92;
+            setLoaderProgress(loadPct);
+        }, 160);
+    }
+
+    function endSceneLoading() {
+        if (loadTimer) {
+            clearInterval(loadTimer);
+            loadTimer = null;
+        }
+        loadPct = 100;
+        setLoaderProgress(100);
+        setTimeout(() => setLoader(false), 120);
+    }
+
+    function defaultHfov() {
+        return typeof sourceSettings.default_hfov === "number" ? sourceSettings.default_hfov : 70;
+    }
+
+    function getCurrentView() {
+        if (!window.viewer) {
+            return {
+                pitch: typeof sourceSettings.start_pitch === "number" ? sourceSettings.start_pitch : 0,
+                yaw: typeof sourceSettings.start_yaw === "number" ? sourceSettings.start_yaw : 0,
+                hfov: defaultHfov()
+            };
+        }
+        return {
+            pitch: typeof window.viewer.getPitch === "function" ? window.viewer.getPitch() : 0,
+            yaw: typeof window.viewer.getYaw === "function" ? window.viewer.getYaw() : 0,
+            hfov: typeof window.viewer.getHfov === "function" ? window.viewer.getHfov() : defaultHfov()
+        };
+    }
+
+    function scheduleViewEnforcement(view) {
+        if (!view || typeof view.pitch !== "number" || typeof view.yaw !== "number") return;
+        pendingView = {
+            pitch: view.pitch,
+            yaw: view.yaw,
+            hfov: typeof view.hfov === "number" ? view.hfov : defaultHfov()
+        };
+    }
+
+    function enforcePendingView() {
+        if (!pendingView || !window.viewer) return;
+        const view = Object.assign({}, pendingView);
+        const apply = () => {
+            try {
+                window.viewer.lookAt(view.pitch, view.yaw, view.hfov, 0);
+                window.viewer.setHfov(view.hfov, 0);
+            } catch (_) {}
+        };
+        apply();
+        setTimeout(apply, 80);
+        setTimeout(apply, 220);
+        setTimeout(apply, 500);
+        setTimeout(apply, 900);
+        pendingView = null;
+    }
+
+    function storeBaseHfov() {
+        if (!window.viewer || transitioning || !window.viewer.getScene) return;
+        const sid = baseSceneId(window.viewer.getScene());
+        if (!sid) return;
+        sceneState[sid] = { hfov: window.viewer.getHfov() };
+    }
+
+    function buildTourConfig() {
+        const startSceneId = sourceSettings.start_scene_id || (sourceScenes[0] && sourceScenes[0].id) || null;
+        const scenes = {};
+
+        sourceScenes.forEach((scene) => {
+            if (!scene || !scene.id) return;
+            const baseAsset = getSceneAsset(scene);
+            if (!baseAsset) return;
+
+            const previewAsset = getPreviewAsset(scene);
+            const hiresAsset = getHiresAsset(scene);
+            if (previewAsset && previewAsset !== baseAsset) {
+                previewMap[scene.id] = `${scene.id}/${previewAsset}`;
+            }
+            if (hiresAsset && hiresAsset !== baseAsset) {
+                hiresMap[scene.id] = `${scene.id}/${hiresAsset}`;
+            }
+
+            scenes[scene.id] = {
+                title: scene.name || "Untitled",
+                type: scene.type || "equirectangular",
+                haov: Math.min(360, Math.max(30, Number(scene.haov || 360))),
+                vaov: Math.min(180, Math.max(30, Number(scene.vaov || 180))),
+                panorama: `${scene.id}/${baseAsset}`,
+                hotSpots: (scene.hotspots || []).map((hs) => ({
+                    pitch: hs.pitch,
+                    yaw: hs.yaw,
+                    cssClass: "custom-hotspot",
+                    clickHandlerFunc: "smoothSwitch",
+                    clickHandlerArgs: {
+                        targetSceneId: hs.target_id,
+                        entryPitch: hs.entry_pitch,
+                        entryYaw: hs.entry_yaw,
+                        viaPitch: hs.pitch,
+                        viaYaw: hs.yaw
+                    }
+                })),
+                minHfov: 30,
+                maxHfov: 120
+            };
+        });
+
+        Object.keys(previewMap).forEach((sid) => {
+            const base = scenes[sid];
+            if (!base) return;
+            const pid = previewSceneId(sid);
+            scenes[pid] = Object.assign({}, base, {
+                title: `${base.title} (preview)`,
+                panorama: previewMap[sid]
             });
-            return sceneMap;
-        }
+        });
 
-        function renderSceneMenu(sceneMap) {
-            const menu = document.getElementById("sceneNavMenu");
-            menu.innerHTML = "";
-            scenes.forEach((scene, index) => {
-                const item = document.createElement("div");
-                item.className = "scene-nav-item";
-                item.innerHTML = `<span>${scene.name || "Untitled"}</span><span class="scene-pill">${index + 1}</span>`;
-                item.addEventListener("click", () => {
-                    loadScene(scene.id);
-                    menu.classList.remove("open");
-                });
-                menu.appendChild(item);
+        Object.keys(hiresMap).forEach((sid) => {
+            const base = scenes[sid];
+            if (!base) return;
+            const hid = hiresSceneId(sid);
+            scenes[hid] = Object.assign({}, base, {
+                title: `${base.title} (HD)`,
+                panorama: hiresMap[sid]
             });
-        }
+        });
 
-        function loadScene(sceneId, pitch = null, yaw = null) {
-            if (!viewer || !sceneId) return;
-            const hfov = viewer.getHfov ? viewer.getHfov() : (settings.default_hfov || 75);
-            viewer.loadScene(sceneId, pitch, yaw, hfov);
-        }
-
-        const sceneMap = buildSceneMap();
-        const firstSceneId = settings.start_scene_id && sceneMap[settings.start_scene_id]
-            ? settings.start_scene_id
-            : (scenes[0] && scenes[0].id);
-
-        const tourConfig = {
+        return {
             default: {
-                firstScene: firstSceneId,
-                sceneFadeDuration: 700,
-                autoLoad: true,
-                hfov: settings.default_hfov || 75
+                firstScene: scenes[startSceneId] ? startSceneId : (Object.keys(scenes).find((sid) => !isPreviewSceneId(sid) && !isHiresSceneId(sid)) || null),
+                autoLoad: false,
+                autoRotate: 0,
+                sceneFadeDuration: 1000,
+                hfov: defaultHfov(),
+                pitch: typeof sourceSettings.start_pitch === "number" ? sourceSettings.start_pitch : 0,
+                yaw: typeof sourceSettings.start_yaw === "number" ? sourceSettings.start_yaw : 0
             },
-            scenes: sceneMap
+            scenes
+        };
+    }
+
+    function prefetchScene(sceneId) {
+        if (!sceneId || prefetchCache.has(sceneId)) return;
+        const scene = tourConfig.scenes[sceneId];
+        if (!scene || !scene.panorama) return;
+        const img = new Image();
+        img.src = scene.panorama;
+        prefetchCache.add(sceneId);
+    }
+
+    function prefetchLinkedScenes(sceneId) {
+        const scene = tourConfig.scenes[sceneId];
+        if (!scene || !scene.hotSpots) return;
+        scene.hotSpots.forEach((hs) => {
+            const targetId = hs.clickHandlerArgs && hs.clickHandlerArgs.targetSceneId;
+            if (!targetId) return;
+            if (previewMap[targetId]) prefetchScene(previewSceneId(targetId));
+            prefetchScene(targetId);
+        });
+    }
+
+    function safeLoadSceneWithView(sceneId, pitch, yaw, hfov) {
+        if (!window.viewer || !sceneId) return;
+        window.viewer.loadScene(sceneId, pitch, yaw, hfov);
+    }
+
+    function updateQualityUI() {
+        const qNav = document.getElementById("qualityNav");
+        const qBtn = document.getElementById("qualityBtn");
+        if (!qNav || !qBtn || !window.viewer || !window.viewer.getScene) return;
+
+        const currentBaseId = baseSceneId(window.viewer.getScene());
+        const hasHd = !!(currentBaseId && hiresMap[currentBaseId]);
+        if (!hasHd) {
+            qNav.style.display = "none";
+            qualityMode = QUALITY_STANDARD;
+            qBtn.textContent = "Web";
+            return;
+        }
+
+        qNav.style.display = "block";
+        qBtn.textContent = qualityMode === QUALITY_ULTRA ? "HD" : "Web";
+    }
+
+    function requestSceneSwitch(targetSceneId, pitch, yaw, hfov) {
+        const baseId = baseSceneId(targetSceneId);
+        if (!baseId) return;
+
+        const desiredHfov = typeof hfov === "number"
+            ? hfov
+            : ((sceneState[baseId] && typeof sceneState[baseId].hfov === "number") ? sceneState[baseId].hfov : defaultHfov());
+
+        const previewId = previewMap[baseId] ? previewSceneId(baseId) : null;
+        const fullId = (qualityMode === QUALITY_ULTRA && hiresMap[baseId]) ? hiresSceneId(baseId) : baseId;
+
+        switchReq = {
+            baseId,
+            previewId,
+            fullId,
+            pitch,
+            yaw,
+            hfov: desiredHfov
         };
 
-        viewer = pannellum.viewer("panorama", tourConfig);
+        if (typeof pitch === "number" && typeof yaw === "number") {
+            scheduleViewEnforcement({ pitch, yaw, hfov: desiredHfov });
+        }
 
-        if (typeof settings.start_pitch === "number" || typeof settings.start_yaw === "number") {
-            viewer.on("load", function applyInitialView() {
-                if (viewer.getScene() !== firstSceneId) return;
-                viewer.lookAt(
-                    typeof settings.start_pitch === "number" ? settings.start_pitch : 0,
-                    typeof settings.start_yaw === "number" ? settings.start_yaw : 0,
-                    settings.default_hfov || 75,
-                    0
-                );
-                viewer.off("load", applyInitialView);
+        transitioning = true;
+        beginSceneLoading(previewId ? "Loading preview..." : "Loading scene...");
+
+        if (previewId && previewId !== fullId) {
+            safeLoadSceneWithView(previewId, pitch, yaw, desiredHfov);
+        } else {
+            safeLoadSceneWithView(fullId, pitch, yaw, desiredHfov);
+        }
+    }
+
+    function maybeUpgradeToUltra() {
+        if (qualityMode !== QUALITY_ULTRA || !window.viewer || !window.viewer.getScene) return;
+        const currentId = window.viewer.getScene();
+        if (isPreviewSceneId(currentId) || isHiresSceneId(currentId)) return;
+        const baseId = baseSceneId(currentId);
+        if (!baseId || !hiresMap[baseId]) return;
+        const view = getCurrentView();
+        switchReq = {
+            baseId,
+            previewId: null,
+            fullId: hiresSceneId(baseId),
+            pitch: view.pitch,
+            yaw: view.yaw,
+            hfov: view.hfov
+        };
+        scheduleViewEnforcement(view);
+        transitioning = true;
+        beginSceneLoading("Loading HD...");
+        safeLoadSceneWithView(hiresSceneId(baseId), view.pitch, view.yaw, view.hfov);
+    }
+
+    function applyQualityMode(mode) {
+        qualityMode = mode === QUALITY_ULTRA ? QUALITY_ULTRA : QUALITY_STANDARD;
+        try {
+            localStorage.setItem("tourQualityMode", qualityMode);
+        } catch (_) {}
+
+        if (!window.viewer || !window.viewer.getScene) {
+            updateQualityUI();
+            return;
+        }
+
+        const currentId = window.viewer.getScene();
+        const baseId = baseSceneId(currentId);
+        const view = getCurrentView();
+
+        if (qualityMode === QUALITY_STANDARD && isHiresSceneId(currentId)) {
+            requestSceneSwitch(baseId, view.pitch, view.yaw, view.hfov);
+        } else if (qualityMode === QUALITY_ULTRA && !isHiresSceneId(currentId) && hiresMap[baseId]) {
+            maybeUpgradeToUltra();
+        }
+
+        updateQualityUI();
+    }
+
+    function smoothSwitch(e, args) {
+        if (!window.viewer || !args || !args.targetSceneId) return;
+
+        const currentBaseId = baseSceneId(window.viewer.getScene());
+        const fromHfov = (sceneState[currentBaseId] && typeof sceneState[currentBaseId].hfov === "number")
+            ? sceneState[currentBaseId].hfov
+            : window.viewer.getHfov();
+        const zoomTarget = Math.max(30, fromHfov - 40);
+        const targetBaseId = baseSceneId(args.targetSceneId);
+        const targetHfov = (sceneState[targetBaseId] && typeof sceneState[targetBaseId].hfov === "number")
+            ? sceneState[targetBaseId].hfov
+            : defaultHfov();
+
+        transitioning = true;
+        window.viewer.setHfov(zoomTarget, 800);
+        window.viewer.lookAt(args.viaPitch, args.viaYaw, zoomTarget, 800);
+
+        setTimeout(() => {
+            requestSceneSwitch(targetBaseId, args.entryPitch, args.entryYaw, targetHfov);
+        }, 260);
+    }
+
+    function renderSceneMenu() {
+        const navMenu = document.getElementById("sceneNavMenu");
+        if (!navMenu) return;
+        navMenu.innerHTML = "";
+
+        const ids = Object.keys(tourConfig.scenes || {}).filter((sid) => !isPreviewSceneId(sid) && !isHiresSceneId(sid));
+        ids.forEach((sid, idx) => {
+            const scene = tourConfig.scenes[sid] || {};
+            const item = document.createElement("div");
+            item.className = "scene-nav-item";
+            item.innerHTML = `<span>${scene.title || sid}</span><span class="pill">#${idx + 1}</span>`;
+            item.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                navMenu.style.display = "none";
+                if (!window.viewer || !window.viewer.getScene) return;
+                if (baseSceneId(window.viewer.getScene()) === sid) return;
+                const view = getCurrentView();
+                requestSceneSwitch(sid, view.pitch, view.yaw, view.hfov);
             });
-        }
-
-        if (tourData.watermark) {
-            document.getElementById("watermark").classList.add("show");
-        }
-
-        renderSceneMenu(sceneMap);
-        document.getElementById("sceneNavBtn").addEventListener("click", () => {
-            document.getElementById("sceneNavMenu").classList.toggle("open");
+            navMenu.appendChild(item);
         });
+    }
+
+    function toggleMenu(show) {
+        const navMenu = document.getElementById("sceneNavMenu");
+        if (!navMenu) return;
+        const want = show === undefined ? navMenu.style.display !== "block" : !!show;
+        if (want) {
+            renderSceneMenu();
+            navMenu.style.display = "block";
+        } else {
+            navMenu.style.display = "none";
+        }
+    }
+
+    const tourConfig = buildTourConfig();
+    Object.values(tourConfig.scenes).forEach((scene) => {
+        if (!scene.hotSpots) return;
+        scene.hotSpots.forEach((hs) => {
+            if (hs.clickHandlerFunc === "smoothSwitch") hs.clickHandlerFunc = smoothSwitch;
+        });
+    });
+
+    try {
+        if (localStorage.getItem("tourQualityMode") === QUALITY_ULTRA) {
+            qualityMode = QUALITY_ULTRA;
+        }
+    } catch (_) {}
+
+    if (sourceData.watermark) {
+        document.getElementById("tourWatermark").classList.add("show");
+    }
+
+    window.viewer = pannellum.viewer("panorama", tourConfig);
+    viewerReady = true;
+
+    window.viewer.on("scenechange", (sceneId) => {
+        prefetchLinkedScenes(baseSceneId(sceneId));
+        updateQualityUI();
+    });
+
+    window.viewer.on("load", () => {
+        const rawSceneId = (() => {
+            try { return window.viewer.getScene(); } catch (_) { return null; }
+        })();
+        const currentBaseId = baseSceneId(rawSceneId);
+
+        if (switchReq && rawSceneId === switchReq.previewId && switchReq.fullId !== switchReq.previewId) {
+            const next = Object.assign({}, switchReq);
+            transitioning = false;
+            endSceneLoading();
+            setTimeout(() => {
+                if (!switchReq || switchReq.baseId !== next.baseId) return;
+                beginSceneLoading(qualityMode === QUALITY_ULTRA && hiresMap[next.baseId] ? "Loading HD..." : "Loading scene...");
+                safeLoadSceneWithView(next.fullId, next.pitch, next.yaw, next.hfov);
+            }, 90);
+            return;
+        }
+
+        try {
+            if (currentBaseId) {
+                let targetHfov = defaultHfov();
+                if (switchReq && switchReq.baseId === currentBaseId && typeof switchReq.hfov === "number") {
+                    targetHfov = switchReq.hfov;
+                } else if (sceneState[currentBaseId] && typeof sceneState[currentBaseId].hfov === "number") {
+                    targetHfov = sceneState[currentBaseId].hfov;
+                }
+                sceneState[currentBaseId] = { hfov: targetHfov };
+                window.viewer.setHfov(targetHfov, 0);
+                if (switchReq && switchReq.baseId === currentBaseId && typeof switchReq.pitch === "number" && typeof switchReq.yaw === "number") {
+                    window.viewer.lookAt(switchReq.pitch, switchReq.yaw, targetHfov, 0);
+                }
+            }
+        } catch (_) {}
+
+        enforcePendingView();
+
+        if (switchReq && switchReq.baseId === currentBaseId && rawSceneId === switchReq.fullId) {
+            switchReq = null;
+        }
+
+        transitioning = false;
+        updateQualityUI();
+        endSceneLoading();
+    });
+
+    const panoEl = document.getElementById("panorama");
+    if (panoEl) {
+        panoEl.addEventListener("mouseup", () => setTimeout(storeBaseHfov, 0));
+        panoEl.addEventListener("touchend", () => setTimeout(storeBaseHfov, 0));
+        let wheelTimer = null;
+        panoEl.addEventListener("wheel", () => {
+            if (wheelTimer) clearTimeout(wheelTimer);
+            wheelTimer = setTimeout(storeBaseHfov, 120);
+        }, { passive: true });
+    }
+
+    const navBtn = document.getElementById("sceneNavBtn");
+    const navMenu = document.getElementById("sceneNavMenu");
+    if (navBtn && navMenu) {
+        navBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleMenu();
+        });
+        document.addEventListener("click", () => toggleMenu(false));
+        document.addEventListener("keydown", (ev) => {
+            if (ev.key === "Escape") toggleMenu(false);
+        });
+    }
+
+    const qualityBtn = document.getElementById("qualityBtn");
+    if (qualityBtn) {
+        qualityBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            applyQualityMode(qualityMode === QUALITY_ULTRA ? QUALITY_STANDARD : QUALITY_ULTRA);
+        });
+    }
+
+    if (tourConfig.default.firstScene) {
+        scheduleViewEnforcement({
+            pitch: tourConfig.default.pitch,
+            yaw: tourConfig.default.yaw,
+            hfov: tourConfig.default.hfov
+        });
+        beginSceneLoading("Loading scene...");
+        safeLoadSceneWithView(
+            tourConfig.default.firstScene,
+            tourConfig.default.pitch,
+            tourConfig.default.yaw,
+            tourConfig.default.hfov
+        );
+    } else if (viewerReady) {
+        setLoader(false);
+    }
     </script>
 </body>
 </html>

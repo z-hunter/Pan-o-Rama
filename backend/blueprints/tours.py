@@ -121,6 +121,20 @@ def tours_patch(tour_id):
     )
     db.commit()
     row = db.execute("SELECT * FROM tours WHERE id = ?", (tour["id"],)).fetchone()
+
+    # Keep the published gallery player in sync with Studio start-view changes.
+    gallery_index = os.path.join(PROCESSED_FOLDER, tour["id"], "index.html")
+    if row is not None and (row["status"] == "published" or os.path.exists(gallery_index)):
+        scenes_data = load_tour_scenes_and_hotspots(tour["id"])
+        if scenes_data:
+            ent = get_user_entitlements(g.current_user["id"])
+            generate_tour(
+                tour["id"],
+                scenes_data,
+                watermark_enabled=ent["watermark_enabled"],
+                tour_settings=row,
+            )
+
     return jsonify({"tour": serialize_tour(row)}), 200
 
 @tours.route("/<tour_id>", methods=["DELETE"])

@@ -40,6 +40,7 @@
             flex: 1; overflow-y: auto; padding: 32px 24px; 
             display: flex; flex-direction: column; gap: 32px; 
         }
+        .tab-panel, #tour-controls { overflow: visible; }
         
         .main-stage { flex: 1; display: flex; flex-direction: column; min-width: 0; background-color: var(--bg-void); }
         
@@ -62,6 +63,65 @@
             background: transparent; z-index: 1000; display: none;
         }
         #top-progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+
+        .viewer-loading {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.74);
+            z-index: 1100;
+            pointer-events: none;
+        }
+        .viewer-loading.visible { display: flex; }
+        .viewer-loading-card {
+            width: min(420px, calc(100% - 48px));
+            padding: 28px;
+            background: rgba(14, 14, 14, 0.92);
+            border: 1px solid rgba(245, 158, 11, 0.18);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+        .viewer-loading-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255,255,255,0.08);
+            overflow: hidden;
+            margin-top: 16px;
+        }
+        .viewer-loading-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-dim) 0%, var(--primary) 100%);
+            transition: width 0.28s ease;
+        }
+        .viewer-loading-meta {
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .studio-card { position: relative; overflow: visible; z-index: 2; }
+        .studio-select {
+            position: relative;
+            z-index: 5;
+            background-color: var(--bg-app);
+            color: var(--text);
+            border: 1px solid rgba(72, 72, 71, 0.4);
+            padding: 12px 14px;
+            appearance: auto;
+        }
+        .studio-select option {
+            background: var(--bg-sidebar);
+            color: var(--text);
+        }
+        .tour-scene-list { margin-bottom: 24px; }
+        .tour-section-title { margin-bottom: 16px; }
+
     </style>
 </head>
 <body>
@@ -102,16 +162,18 @@
                     NO SCENES UPLOADED<br>Please upload scenes to configure tour.
                 </div>
                 <div id="tour-controls" style="display:none;">
+                    <h3 class="tour-section-title">Scenes</h3>
+                    <div id="tourScenesList" class="tour-scene-list mb-8"></div>
                     <h3 class="mb-6">Tour Connections</h3>
                     <button class="btn mb-6" style="width:100%;" onclick="startLinking()">Add Hotspot</button>
-                    <div id="portalForm" style="display:none;" class="card mb-6" style="background-color: var(--bg-app);">
+                    <div id="portalForm" style="display:none; background-color: var(--bg-app);" class="card studio-card mb-6">
                         <label class="label-technical block mb-2">Target Scene</label>
-                        <select id="targetScene" class="mb-4"></select>
+                        <select id="targetScene" class="studio-select mb-4"></select>
                         <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Save Hotspot</button>
                     </div>
-                    <div class="card mb-6" style="background-color: var(--bg-app);">
+                    <div class="card studio-card mb-6" style="background-color: var(--bg-app);">
                         <label class="label-technical block mb-2">Incoming Links</label>
-                        <select id="incomingLinkSelect" class="mb-4"></select>
+                        <select id="incomingLinkSelect" class="studio-select mb-4"></select>
                         <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Set Entry View</button>
                     </div>
                     <h3 class="mt-8 mb-6">Starting Point</h3>
@@ -169,6 +231,19 @@
                     <p class="muted mono" style="font-size: 12px;">Create a new tour or select an existing one from the dashboard to begin editing.</p>
                 </div>
             </div>
+            <div id="viewerLoading" class="viewer-loading">
+                <div class="viewer-loading-card">
+                    <h2 id="viewerLoadingTitle" class="mb-4" style="color: var(--primary);">Loading Studio</h2>
+                    <p id="viewerLoadingText" class="muted mono" style="font-size: 12px;">Fetching scenes and preparing the starting view.</p>
+                    <div class="viewer-loading-bar">
+                        <div class="viewer-loading-fill"></div>
+                    </div>
+                    <div class="viewer-loading-meta">
+                        <span id="viewerLoadingStage">INITIALIZING</span>
+                        <span id="viewerLoadingPct">0%</span>
+                    </div>
+                </div>
+            </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
         </main>
     </div>
@@ -182,6 +257,8 @@
         let viewer = null;
         let currentPlanId = null;
         let lastClickCoords = null;
+        let currentTourSlug = null;
+        let viewerLoadingProgress = 0;
         const jobPollers = new Map();
 
         function getTourIdFromQuery() {
@@ -211,15 +288,41 @@
 
         async function loadExistingTour(tourId) {
             setLoading(true, "Synchronizing...");
+            setViewerLoading(true, {
+                title: "Loading Studio",
+                text: "Fetching scenes and preparing the starting view.",
+                progress: 15,
+                stage: "FETCHING TOUR"
+            });
             const out = await apiFetch(`/tours/${tourId}`);
             if (out && out.res.ok) {
                 projectId = out.data.tour.id;
+                currentTourSlug = out.data.tour.slug || null;
                 scenes = out.data.tour.scenes || [];
                 tourSettings = { start_scene_id: out.data.tour.start_scene_id, start_pitch: out.data.tour.start_pitch, start_yaw: out.data.tour.start_yaw, default_hfov: out.data.tour.default_hfov || 70 };
                 if (document.getElementById('tourVisibility')) document.getElementById('tourVisibility').value = out.data.tour.visibility || 'public';
                 document.getElementById('step1').style.display = 'none';
                 updateScenesUI();
-                if (scenes.length > 0) loadScene(tourSettings.start_scene_id && scenes.some(s => s.id === tourSettings.start_scene_id) ? tourSettings.start_scene_id : scenes[0].id);
+                setViewerLoading(true, {
+                    title: "Loading Studio",
+                    text: scenes.length > 0 ? "Scenes loaded. Preparing the starting panorama." : "Tour loaded. No scenes found yet.",
+                    progress: scenes.length > 0 ? 45 : 100,
+                    stage: scenes.length > 0 ? "PREPARING VIEWER" : "READY"
+                });
+                if (scenes.length > 0) {
+                    await loadScene(
+                        tourSettings.start_scene_id && scenes.some(s => s.id === tourSettings.start_scene_id) ? tourSettings.start_scene_id : scenes[0].id,
+                        null,
+                        null,
+                        null,
+                        null,
+                        { showLoader: true, loaderTitle: "Loading Start Scene", loaderText: "Opening the first panorama in Studio.", loaderProgress: 72, loaderStage: "OPENING SCENE" }
+                    );
+                } else {
+                    setViewerLoading(false);
+                }
+            } else {
+                setViewerLoading(false);
             }
             setLoading(false);
         }
@@ -291,30 +394,64 @@
 
         async function refreshTour() {
             const out = await apiFetch(`/tours/${projectId}`);
-            if (out && out.res.ok) { scenes = out.data.tour.scenes || []; updateScenesUI(); }
+            if (out && out.res.ok) {
+                scenes = out.data.tour.scenes || [];
+                currentTourSlug = out.data.tour.slug || currentTourSlug;
+                updateScenesUI();
+            }
+        }
+
+        function renderSceneList(containerId, { allowDelete = false } = {}) {
+            const list = document.getElementById(containerId);
+            if (!list) return;
+            list.innerHTML = '';
+            scenes.forEach(s => {
+                const isReady = !s.processing_status || s.processing_status === 'ready';
+                const div = document.createElement('div');
+                div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
+                div.innerHTML = `
+                    <div style="flex:1; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="loadScene('${s.id}')">
+                        <div class="badge ${isReady?'badge-success':'badge-warning'}">${isReady?'OK':'BUSY'}</div>
+                        <span class="mono" style="font-size:11px;">${s.name}</span>
+                    </div>
+                    ${allowDelete ? `<button class="btn btn-sm btn-danger" style="padding:2px 6px; border:0;" onclick="deleteScene('${s.id}')">×</button>` : ``}
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function populateIncomingLinksSelect() {
+            const select = document.getElementById('incomingLinkSelect');
+            if (!select) return;
+            const incoming = [];
+            scenes.forEach(scene => {
+                (scene.hotspots || []).forEach((hs, idx) => {
+                    if (hs.target_id === activeSceneId) {
+                        incoming.push({
+                            sourceSceneId: scene.id,
+                            sourceSceneName: scene.name,
+                            hotspotIndex: idx,
+                            label: `${scene.name} -> ${scenes.find(x => x.id === activeSceneId)?.name || 'Current scene'}`
+                        });
+                    }
+                });
+            });
+            if (incoming.length === 0) {
+                select.innerHTML = '<option value="">No incoming links yet</option>';
+                return;
+            }
+            select.innerHTML = incoming.map(link => (
+                `<option value="${link.sourceSceneId}:${link.hotspotIndex}">${link.label}</option>`
+            )).join('');
         }
 
         function updateScenesUI() {
-            const list = document.getElementById('scenesList');
             if (document.getElementById('scene-count-badge')) document.getElementById('scene-count-badge').textContent = scenes.length;
-            if (list) {
-                list.innerHTML = '';
-                scenes.forEach(s => {
-                    const isReady = !s.processing_status || s.processing_status === 'ready';
-                    const div = document.createElement('div');
-                    div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
-                    div.innerHTML = `
-                        <div style="flex:1; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="loadScene('${s.id}')">
-                            <div class="badge ${isReady?'badge-success':'badge-warning'}">${isReady?'OK':'BUSY'}</div>
-                            <span class="mono" style="font-size:11px;">${s.name}</span>
-                        </div>
-                        <button class="btn btn-sm btn-danger" style="padding:2px 6px; border:0;" onclick="deleteScene('${s.id}')">×</button>
-                    `;
-                    list.appendChild(div);
-                });
-            }
+            renderSceneList('scenesList', { allowDelete: true });
+            renderSceneList('tourScenesList', { allowDelete: false });
             document.getElementById('tour-empty-state').style.display = scenes.length > 0 ? 'none' : 'block';
             document.getElementById('tour-controls').style.display = scenes.length > 0 ? 'block' : 'none';
+            populateIncomingLinksSelect();
         }
 
         async function deleteScene(sceneId) {
@@ -327,18 +464,76 @@
             }
         }
 
-        function loadScene(id, tp, ty, ep, ey) {
+        function setViewerLoading(show, options = {}) {
+            const el = document.getElementById('viewerLoading');
+            const titleEl = document.getElementById('viewerLoadingTitle');
+            const textEl = document.getElementById('viewerLoadingText');
+            const fillEl = document.querySelector('.viewer-loading-fill');
+            const pctEl = document.getElementById('viewerLoadingPct');
+            const stageEl = document.getElementById('viewerLoadingStage');
+            if (!el) return;
+            if (!show) {
+                if (fillEl) fillEl.style.width = '100%';
+                if (pctEl) pctEl.textContent = '100%';
+                if (stageEl) stageEl.textContent = 'READY';
+                setTimeout(() => {
+                    el.classList.remove('visible');
+                    viewerLoadingProgress = 0;
+                    if (fillEl) fillEl.style.width = '0%';
+                    if (pctEl) pctEl.textContent = '0%';
+                    if (stageEl) stageEl.textContent = 'INITIALIZING';
+                }, 180);
+                return;
+            }
+            const nextProgress = Math.max(viewerLoadingProgress, Math.min(100, Number(options.progress ?? viewerLoadingProgress)));
+            viewerLoadingProgress = nextProgress;
+            if (titleEl) titleEl.textContent = options.title || "Loading Studio";
+            if (textEl) textEl.textContent = options.text || "Preparing the panorama viewer.";
+            if (stageEl) stageEl.textContent = options.stage || 'LOADING';
+            if (fillEl) fillEl.style.width = `${nextProgress}%`;
+            if (pctEl) pctEl.textContent = `${Math.round(nextProgress)}%`;
+            el.classList.add('visible');
+        }
+
+        function loadScene(id, tp, ty, ep, ey, options = {}) {
             const s = scenes.find(x => x.id === id);
-            if (!s || (s.processing_status && s.processing_status !== 'ready')) return;
+            if (!s || (s.processing_status && s.processing_status !== 'ready')) return Promise.resolve(false);
+            const showLoader = options.showLoader !== false;
             activeSceneId = id; updateScenesUI();
             const url = `/galleries/${projectId}/${id}/${s.web || s.panorama}`;
             const config = { "type": s.type || "equirectangular", "hfov": tourSettings.default_hfov, "haov": s.haov || 360, "vaov": s.vaov || 180, "panorama": url, "autoLoad": true, "hotSpots": (s.hotspots || []).map(h => ({ pitch: h.pitch, yaw: h.yaw, cssClass: "custom-hotspot", clickHandlerFunc: () => loadScene(h.target_id, null, null, h.entry_pitch, h.entry_yaw) })) };
             if (ep !== undefined) config.pitch = ep; if (ey !== undefined) config.yaw = ey;
             if (viewer) viewer.destroy();
+            if (showLoader) {
+                setViewerLoading(true, {
+                    title: options.loaderTitle || "Loading Scene",
+                    text: options.loaderText || `Opening ${s.name} in Studio.`,
+                    progress: options.loaderProgress ?? 72,
+                    stage: options.loaderStage || "OPENING SCENE"
+                });
+            }
             document.getElementById('step1-workspace').style.display = 'none';
             document.getElementById('pano-editor').style.display = 'block';
             viewer = pannellum.viewer('pano-editor', config);
-            viewer.on('mousedown', (e) => {
+            return new Promise((resolve) => {
+                const finalizeLoad = () => {
+                    if (showLoader) {
+                        setViewerLoading(true, {
+                            title: "Studio Ready",
+                            text: `${s.name} is ready for editing.`,
+                            progress: 100,
+                            stage: "READY"
+                        });
+                    }
+                    setViewerLoading(false);
+                    populateIncomingLinksSelect();
+                    resolve(true);
+                };
+                viewer.on('load', finalizeLoad);
+                viewer.on('scenechangefadedone', finalizeLoad);
+                setTimeout(finalizeLoad, 1800);
+            }).finally(() => {
+                viewer.on('mousedown', (e) => {
                 const c = viewer.mouseEventToCoords(e); lastClickCoords = c;
                 if (document.getElementById('linkingStatus')) document.getElementById('linkingStatus').textContent = `P: ${c[0].toFixed(2)} | Y: ${c[1].toFixed(2)}`;
                 document.getElementById('portalForm').style.display = 'block';
@@ -346,12 +541,75 @@
                 sel.innerHTML = '<option value="">Target...</option>';
                 scenes.filter(x => x.id !== activeSceneId).forEach(x => sel.innerHTML += `<option value="${x.id}">${x.name}</option>`);
             });
+            });
         }
 
         function showEmptyWorkspace() {
             if (viewer) viewer.destroy();
             document.getElementById('pano-editor').style.display = 'none';
             document.getElementById('step1-workspace').style.display = 'flex';
+            setViewerLoading(false);
+        }
+
+        function startLinking() {
+            if (!activeSceneId) return showToast("Open a scene first.", "error");
+            document.getElementById('portalForm').style.display = 'block';
+            showToast("Click inside the panorama to place a hotspot.");
+        }
+
+        async function setCurrentSceneAsStart() {
+            if (!projectId || !activeSceneId || !viewer) return showToast("Open a scene first.", "error");
+            const payload = {
+                start_scene_id: activeSceneId,
+                start_pitch: viewer.getPitch(),
+                start_yaw: viewer.getYaw(),
+                default_hfov: viewer.getHfov()
+            };
+            const out = await apiFetch(`/tours/${projectId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (out && out.res.ok) {
+                tourSettings = { ...tourSettings, ...payload };
+                showToast('Start scene updated', 'success');
+            } else {
+                showToast(out?.data?.error || 'Failed to update start scene', 'error');
+            }
+        }
+
+        function storePosForIncomingLink() {
+            if (!viewer || !activeSceneId) return showToast("Open a scene first.", "error");
+            const val = document.getElementById('incomingLinkSelect').value;
+            if (!val || !val.includes(':')) return showToast("Select an incoming link first.", "error");
+            const [sourceSceneId, hotspotIndexRaw] = val.split(':');
+            const hotspotIndex = Number(hotspotIndexRaw);
+            const source = scenes.find(x => x.id === sourceSceneId);
+            if (!source || !source.hotspots || !source.hotspots[hotspotIndex]) return showToast("Incoming link not found.", "error");
+            source.hotspots[hotspotIndex].entry_pitch = viewer.getPitch();
+            source.hotspots[hotspotIndex].entry_yaw = viewer.getYaw();
+            showToast('Entry view saved', 'success');
+        }
+
+        function downloadFacebook360FirstScene() {
+            if (!projectId) return showToast("Create or open a tour first.", "error");
+            window.open(`/tours/${projectId}/export/facebook360`, '_blank');
+        }
+
+        function exportSelfHostedPackage() {
+            if (!projectId) return showToast("Create or open a tour first.", "error");
+            window.open(`/tours/${projectId}/export/self-hosted`, '_blank');
+        }
+
+        async function copyFullTourShareLink() {
+            if (!currentTourSlug) return showToast("Publish or open a tour first.", "error");
+            const url = `${window.location.origin}/t/${currentTourSlug}`;
+            try {
+                await navigator.clipboard.writeText(url);
+                showToast('Share link copied', 'success');
+            } catch (_) {
+                showToast(url, 'info');
+            }
         }
 
         async function savePortal() {
