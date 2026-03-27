@@ -2,7 +2,10 @@
  * Common API fetch wrapper for Pan-o-Rama
  */
 async function apiFetch(url, opts = {}) {
-    const res = await fetch(url, opts);
+    const res = await fetch(url, {
+        cache: 'no-store',
+        ...opts,
+    });
     const data = await res.json().catch(() => ({}));
     
     if (res.status === 401 && !window.location.pathname.includes('/login')) {
