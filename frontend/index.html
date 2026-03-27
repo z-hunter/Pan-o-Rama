@@ -360,6 +360,12 @@
             for (let f of files) formData.append('files[]', f);
 
             setLoading(true, "Uploading...");
+            setViewerLoading(true, {
+                title: "Uploading Scene",
+                text: "Uploading files to Studio and preparing processing.",
+                progress: 8,
+                stage: "UPLOADING FILES"
+            });
             const out = await apiFetch(`/tours/${projectId}/scenes?async=1`, { method: 'POST', body: formData });
             if (out && out.res.ok) {
                 if (out.data.scene) {
@@ -367,6 +373,12 @@
                     if (!activeSceneId) pendingSceneLoadId = out.data.scene.id;
                 }
                 updateScenesUI();
+                setViewerLoading(true, {
+                    title: "Processing Scene",
+                    text: "Files uploaded. Generating panorama assets for Studio.",
+                    progress: 28,
+                    stage: "PROCESSING SCENE"
+                });
                 if (out.data.job_id) {
                     pollJobUntilTerminal(out.data.job_id, {
                         refreshTourOnDone: true,
@@ -374,6 +386,7 @@
                     });
                 }
             } else {
+                setViewerLoading(false);
                 const errMsg = (out && out.data && out.data.error) ? out.data.error : "Failed to upload scene due to server error.";
                 showToast(errMsg, "error");
             }
