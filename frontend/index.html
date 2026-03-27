@@ -363,7 +363,12 @@
             if (out && out.res.ok) {
                 if (out.data.scene) scenes.push(out.data.scene);
                 updateScenesUI();
-                if (out.data.job_id) pollJobUntilTerminal(out.data.job_id, { refreshTourOnDone: true });
+                if (out.data.job_id) {
+                    pollJobUntilTerminal(out.data.job_id, {
+                        refreshTourOnDone: true,
+                        fallbackSceneId: out.data.scene ? out.data.scene.id : null
+                    });
+                }
             } else {
                 const errMsg = (out && out.data && out.data.error) ? out.data.error : "Failed to upload scene due to server error.";
                 showToast(errMsg, "error");
@@ -371,23 +376,50 @@
             setLoading(false);
         }
 
-        async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false } = {}) {
+        async function pollJobUntilTerminal(jobId, { refreshTourOnDone = false, fallbackSceneId = null } = {}) {
             if (jobPollers.has(jobId)) return;
             jobPollers.set(jobId, true);
             let done = false;
-            while (!done) {
+            let retryCount = 0;
+            
+            while (!done && retryCount < 300) { // Max 10 minutes
                 const out = await apiFetch(`/jobs/${jobId}`);
-                if (!out) break;
-                const job = out.data.job;
-                if (job.scene_id) {
-                    const s = scenes.find(x => x.id === job.scene_id);
-                    if (s) { s.processing_status = job.status === 'done' ? 'ready' : job.status; }
+                if (!out || !out.res.ok) {
+                    retryCount++;
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                
+                const job = out.data && out.data.job ? out.data.job : null;
+                if (!job) {
+                    retryCount++;
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+
+                retryCount = 0;
+                const jobSceneId = job.scene_id || (job.result && job.result.scene && job.result.scene.id) || fallbackSceneId;
+                if (jobSceneId) {
+                    const s = scenes.find(x => x.id === jobSceneId);
+                    if (s) { 
+                        s.processing_status = job.status === 'done' ? 'ready' : job.status; 
+                        if (job.status === 'done' && job.result && job.result.scene) {
+                            // Update local scene data with processed results (haov, vaov, paths)
+                            Object.assign(s, job.result.scene);
+                        } else if (job.status === 'failed') {
+                            s.processing_error = job.error || "Scene processing failed";
+                        }
+                    }
                     updateScenesUI();
                 }
+                
                 if (job.status === 'done' || job.status === 'failed') {
                     done = true;
                     if (refreshTourOnDone) await refreshTour();
-                } else { await new Promise(r => setTimeout(r, 2000)); }
+                    showToast(job.status === 'done' ? "Processing complete" : "Processing failed", job.status === 'done' ? "success" : "error");
+                } else { 
+                    await new Promise(r => setTimeout(r, 2000)); 
+                }
             }
             jobPollers.delete(jobId);
         }

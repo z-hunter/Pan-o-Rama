@@ -49,6 +49,9 @@ def create_app():
     from backend.blueprints.analytics import analytics as analytics_blueprint
     app.register_blueprint(analytics_blueprint, url_prefix='/api/analytics')
 
+    from backend.blueprints.jobs import jobs as jobs_blueprint
+    app.register_blueprint(jobs_blueprint, url_prefix='/jobs')
+
     # Global Hooks
     @app.before_request
     def attach_current_user():
