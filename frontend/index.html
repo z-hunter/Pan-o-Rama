@@ -390,6 +390,14 @@
                 const out = await apiFetch(`/jobs/${jobId}`);
                 if (!out || !out.res.ok) {
                     retryCount++;
+                    if (refreshTourOnDone && fallbackSceneId && retryCount % 2 === 0) {
+                        const fallbackScene = await refreshTour({ autoLoadSceneId: fallbackSceneId });
+                        if (fallbackScene && (!fallbackScene.processing_status || fallbackScene.processing_status === 'ready')) {
+                            done = true;
+                            showToast("Processing complete", "success");
+                            break;
+                        }
+                    }
                     await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
@@ -397,6 +405,14 @@
                 const job = out.data && out.data.job ? out.data.job : null;
                 if (!job) {
                     retryCount++;
+                    if (refreshTourOnDone && fallbackSceneId && retryCount % 2 === 0) {
+                        const fallbackScene = await refreshTour({ autoLoadSceneId: fallbackSceneId });
+                        if (fallbackScene && (!fallbackScene.processing_status || fallbackScene.processing_status === 'ready')) {
+                            done = true;
+                            showToast("Processing complete", "success");
+                            break;
+                        }
+                    }
                     await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
@@ -460,7 +476,9 @@
                         loaderStage: "OPENING SCENE"
                     });
                 }
+                return autoLoadSceneId ? scenes.find(s => s.id === autoLoadSceneId) || null : null;
             }
+            return null;
         }
 
         function renderSceneList(containerId, { allowDelete = false } = {}) {
