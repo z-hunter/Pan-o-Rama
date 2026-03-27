@@ -17,6 +17,7 @@ scenes = Blueprint('scenes', __name__)
 @scenes.route("/tours/<tour_id>/scenes", methods=["POST"])
 @require_auth
 def tours_add_scene(tour_id):
+    sid = None
     try:
         tour, err = fetch_tour_with_access(tour_id, require_owner=True)
         if err: return err
@@ -85,6 +86,16 @@ def tours_add_scene(tour_id):
         return jsonify({"scene": serialize_scene(row), "job_id": jid}), 202
     except Exception as e:
         import traceback
+        if sid:
+            try:
+                db = get_db()
+                db.execute(
+                    "UPDATE scenes SET processing_status = 'failed', processing_error = ?, updated_at = ? WHERE id = ?",
+                    (str(e), now_iso(), sid),
+                )
+                db.commit()
+            except Exception:
+                pass
         current_app.logger.error(f"Error in tours_add_scene: {traceback.format_exc()}")
         return jsonify({"error": f"Server crash: {str(e)}"}), 500
 
