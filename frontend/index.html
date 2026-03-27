@@ -259,6 +259,7 @@
         let lastClickCoords = null;
         let currentTourSlug = null;
         let viewerLoadingProgress = 0;
+        let pendingSceneLoadId = null;
         const jobPollers = new Map();
 
         function getTourIdFromQuery() {
@@ -361,7 +362,10 @@
             setLoading(true, "Uploading...");
             const out = await apiFetch(`/tours/${projectId}/scenes?async=1`, { method: 'POST', body: formData });
             if (out && out.res.ok) {
-                if (out.data.scene) scenes.push(out.data.scene);
+                if (out.data.scene) {
+                    scenes.push(out.data.scene);
+                    if (!activeSceneId) pendingSceneLoadId = out.data.scene.id;
+                }
                 updateScenesUI();
                 if (out.data.job_id) {
                     pollJobUntilTerminal(out.data.job_id, {
@@ -415,7 +419,10 @@
                 
                 if (job.status === 'done' || job.status === 'failed') {
                     done = true;
-                    if (refreshTourOnDone) await refreshTour();
+                    if (refreshTourOnDone) {
+                        const shouldAutoLoad = job.status === 'done' && jobSceneId && (!activeSceneId || activeSceneId === jobSceneId || pendingSceneLoadId === jobSceneId);
+                        await refreshTour({ autoLoadSceneId: shouldAutoLoad ? jobSceneId : null });
+                    }
                     showToast(job.status === 'done' ? "Processing complete" : "Processing failed", job.status === 'done' ? "success" : "error");
                 } else { 
                     await new Promise(r => setTimeout(r, 2000)); 
@@ -424,12 +431,35 @@
             jobPollers.delete(jobId);
         }
 
-        async function refreshTour() {
+        async function refreshTour({ autoLoadSceneId = null } = {}) {
             const out = await apiFetch(`/tours/${projectId}`);
             if (out && out.res.ok) {
                 scenes = out.data.tour.scenes || [];
                 currentTourSlug = out.data.tour.slug || currentTourSlug;
                 updateScenesUI();
+
+                const readySceneIds = new Set(
+                    scenes.filter(s => !s.processing_status || s.processing_status === 'ready').map(s => s.id)
+                );
+                const startSceneId =
+                    tourSettings.start_scene_id && readySceneIds.has(tourSettings.start_scene_id)
+                        ? tourSettings.start_scene_id
+                        : (scenes.find(s => readySceneIds.has(s.id)) || {}).id || null;
+                const sceneToLoad =
+                    (autoLoadSceneId && readySceneIds.has(autoLoadSceneId) ? autoLoadSceneId : null) ||
+                    (pendingSceneLoadId && readySceneIds.has(pendingSceneLoadId) ? pendingSceneLoadId : null) ||
+                    (!activeSceneId ? startSceneId : null);
+
+                if (sceneToLoad) {
+                    pendingSceneLoadId = null;
+                    await loadScene(sceneToLoad, null, null, null, null, {
+                        showLoader: true,
+                        loaderTitle: "Loading Scene",
+                        loaderText: "Opening the processed panorama in Studio.",
+                        loaderProgress: 72,
+                        loaderStage: "OPENING SCENE"
+                    });
+                }
             }
         }
 
