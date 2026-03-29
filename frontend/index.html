@@ -123,6 +123,45 @@
             opacity: 0.45;
             pointer-events: none;
         }
+        .scene-audio-name {
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .scene-meta-icons {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex: 0 0 auto;
+        }
+        .scene-status-icon {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            display: inline-block;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.04);
+        }
+        .scene-status-icon.ready {
+            background: #10b981;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+        }
+        .scene-status-icon.busy {
+            background: #f59e0b;
+            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
+        }
+        .scene-audio-icon {
+            width: 14px;
+            height: 14px;
+            display: inline-block;
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: contain;
+            opacity: 0.9;
+            filter: drop-shadow(0 0 6px rgba(129, 236, 255, 0.22));
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%2381ecff' d='M7.1 3.4 4.6 5.5H2.7c-.4 0-.7.3-.7.7v3.6c0 .4.3.7.7.7h1.9l2.5 2.1c.5.4 1.2.1 1.2-.6V4c0-.7-.8-1-1.2-.6Zm3 2.1a.75.75 0 0 1 1.06.04c1.45 1.57 1.45 3.33 0 4.9a.75.75 0 0 1-1.1-1.02c.92-.99.92-1.88 0-2.87a.75.75 0 0 1 .04-1.05Zm2.48-1.9a.75.75 0 0 1 1.05.08c2.27 2.72 2.27 5.9 0 8.62a.75.75 0 1 1-1.13-.98c1.81-2.18 1.81-4.48 0-6.66a.75.75 0 0 1 .08-1.06Z'/%3E%3C/svg%3E");
+        }
         .tour-scene-list { margin-bottom: 24px; }
         .tour-section-title { margin-bottom: 16px; }
 
@@ -186,10 +225,10 @@
                         <h3 class="mb-4">Scene Audio</h3>
                         <p id="sceneAudioSelection" class="muted mono mb-4" style="font-size: 11px;">Select a scene to attach audio.</p>
                         <div id="sceneAudioState" class="mb-4"></div>
-                        <div class="flex gap-2" style="flex-wrap: wrap;">
-                            <label class="btn btn-secondary btn-sm file-trigger-disabled" id="sceneAudioUploadBtn" for="sceneAudioFile" aria-disabled="true">Add Audio File</label>
-                            <button class="btn btn-secondary btn-sm" id="sceneAudioPreviewBtn" type="button" onclick="toggleSceneAudioPreview()" disabled>Preview</button>
-                            <button class="btn btn-danger btn-sm" id="sceneAudioRemoveBtn" type="button" onclick="removeSceneAudio()" disabled>Remove Audio</button>
+                        <label class="btn btn-secondary btn-sm file-trigger-disabled mb-2" id="sceneAudioUploadBtn" for="sceneAudioFile" aria-disabled="true" style="width:100%; text-align:center;">Add Audio File</label>
+                        <div class="flex gap-2" id="sceneAudioActions" style="display:none; flex-wrap: wrap;">
+                            <button class="btn btn-secondary btn-sm" id="sceneAudioPreviewBtn" type="button" onclick="toggleSceneAudioPreview()" disabled style="flex:1 1 140px;">Preview</button>
+                            <button class="btn btn-danger btn-sm" id="sceneAudioRemoveBtn" type="button" onclick="removeSceneAudio()" disabled style="flex:1 1 140px;">Remove Audio</button>
                         </div>
                         <input type="file" id="sceneAudioFile" accept=".mp3,.ogg,.wav,.m4a,.aac,audio/*" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;">
                         <audio id="sceneAudioPreview" style="display:none;"></audio>
@@ -517,13 +556,17 @@
             list.innerHTML = '';
             scenes.forEach(s => {
                 const isReady = !s.processing_status || s.processing_status === 'ready';
-                const audioBadge = s.audio ? `<span class="badge" style="background: rgba(129, 236, 255, 0.12); color: var(--primary); border: 1px solid rgba(129, 236, 255, 0.22);">AUDIO</span>` : '';
+                const metaIcons = `
+                    <span class="scene-meta-icons">
+                        <span class="scene-status-icon ${isReady ? 'ready' : 'busy'}" title="${isReady ? 'Ready' : 'Processing'}"></span>
+                        ${s.audio ? '<span class="scene-audio-icon" title="Audio attached"></span>' : ''}
+                    </span>
+                `;
                 const div = document.createElement('div');
                 div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
                 div.innerHTML = `
                     <div style="flex:1; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="loadScene('${s.id}')">
-                        <div class="badge ${isReady?'badge-success':'badge-warning'}">${isReady?'OK':'BUSY'}</div>
-                        ${audioBadge}
+                        ${metaIcons}
                         <span class="mono" style="font-size:11px;">${s.name}</span>
                     </div>
                     ${allowDelete ? `<button class="btn btn-sm btn-danger" style="padding:2px 6px; border:0;" onclick="deleteScene('${s.id}')">×</button>` : ``}
@@ -571,22 +614,30 @@
             return scenes.find((scene) => scene.id === activeSceneId) || null;
         }
 
+        function formatSceneAudioName(scene) {
+            const rawName = (scene && (scene.audio_name || scene.audio)) ? String(scene.audio_name || scene.audio) : '';
+            if (!rawName) return '';
+            return rawName.replace(/^audio_/, '');
+        }
+
         function updateSceneAudioUI() {
             const selectionEl = document.getElementById('sceneAudioSelection');
             const stateEl = document.getElementById('sceneAudioState');
             const uploadBtn = document.getElementById('sceneAudioUploadBtn');
+            const actionsEl = document.getElementById('sceneAudioActions');
             const previewBtn = document.getElementById('sceneAudioPreviewBtn');
             const removeBtn = document.getElementById('sceneAudioRemoveBtn');
             const audioEl = document.getElementById('sceneAudioPreview');
             const activeScene = getActiveScene();
 
-            if (!selectionEl || !stateEl || !uploadBtn || !previewBtn || !removeBtn || !audioEl) return;
+            if (!selectionEl || !stateEl || !uploadBtn || !actionsEl || !previewBtn || !removeBtn || !audioEl) return;
 
             if (!activeScene) {
                 selectionEl.textContent = 'Select a scene to attach audio.';
                 stateEl.innerHTML = '<p class="muted mono" style="font-size:11px;">Optional ambient sound for the currently selected scene.</p>';
                 uploadBtn.classList.add('file-trigger-disabled');
                 uploadBtn.setAttribute('aria-disabled', 'true');
+                actionsEl.style.display = 'none';
                 previewBtn.disabled = true;
                 removeBtn.disabled = true;
                 if (!audioEl.paused) audioEl.pause();
@@ -602,12 +653,15 @@
             uploadBtn.setAttribute('aria-disabled', 'false');
 
             if (activeScene.audio) {
-                stateEl.innerHTML = `<p class="mono" style="font-size:11px;">${activeScene.audio_name || activeScene.audio}</p>`;
+                const displayAudioName = formatSceneAudioName(activeScene);
+                stateEl.innerHTML = `<p class="mono scene-audio-name" style="font-size:11px;" title="${activeScene.audio_name || activeScene.audio}">${displayAudioName}</p>`;
+                actionsEl.style.display = 'flex';
                 previewBtn.disabled = false;
                 removeBtn.disabled = false;
                 previewBtn.textContent = (!audioEl.paused && previewAudioSceneId === activeScene.id) ? 'Stop Preview' : 'Preview';
             } else {
                 stateEl.innerHTML = '<p class="muted mono" style="font-size:11px;">No audio attached yet. Supported: MP3, OGG, WAV, M4A, AAC.</p>';
+                actionsEl.style.display = 'none';
                 previewBtn.disabled = true;
                 removeBtn.disabled = true;
                 if (previewAudioSceneId === activeScene.id && !audioEl.paused) {

@@ -243,10 +243,9 @@
           }) 
         });
         console.log("Create response:", out);
-        if (out && out.res.ok) { 
-          showToast('Tour Created', 'success'); 
-          closeCreateModal(); 
-          init(); 
+        if (out && out.res.ok && out.data?.tour?.id) { 
+          closeCreateModal();
+          openStudio(out.data.tour.id);
         } else {
           showToast(out?.data?.error || 'Failed to create tour', 'error');
         }
