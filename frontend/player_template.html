@@ -3,322 +3,194 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Lokalny Obiektyw - Player</title>
+    <title>Virtual Tour</title>
+    <meta name="lokalny_obiektyw_gallery_template" content="custom-pannellum-v6-final-proportions">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <style>
-        :root { --primary: #81ecff; --bg: #000; }
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: sans-serif; }
-        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #css3d-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-        #css3d-container > div { pointer-events: auto; }
-        .hotspot-arrow {
-            width: 80px; height: 80px;
-            background: rgba(129, 236, 255, 0.2);
-            border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: all 0.3s ease; border: 2px solid var(--primary);
-        }
-        .hotspot-arrow::after { content: '▲'; color: var(--primary); font-size: 24px; }
-        .hotspot-arrow:hover { background: rgba(129, 236, 255, 0.5); transform: scale(1.1); box-shadow: 0 0 20px var(--primary); }
-        #ui-overlay { position: absolute; top: 20px; left: 20px; z-index: 100; color: white; pointer-events: none; }
-        #debug-info {
-            position: absolute; bottom: 20px; left: 20px; z-index: 100;
-            color: var(--primary); font-family: monospace; font-size: 12px;
-            background: rgba(0,0,0,0.5); padding: 5px; border-radius: 4px; pointer-events: none;
-        }
-        #watermark { position: absolute; bottom: 30px; right: 30px; opacity: 0.4; z-index: 100; }
-        .loading-overlay {
+        :root { --primary: #007bff; --bg: #000; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        #panorama { width: 100vw; height: 100vh; background: #0b0b0b; outline: none; border: none; }
+        
+        /* Experimental Floor Ring Overlay */
+        #overlay-container {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #000; display: flex; align-items: center; justify-content: center;
-            z-index: 1000; transition: opacity 0.5s;
+            pointer-events: none; z-index: 999999; /* Ultra high z-index */
         }
-        .loading-text { color: var(--primary); font-family: monospace; letter-spacing: 4px; }
+        #floor-ring {
+            position: absolute; width: 120px; height: 120px;
+            border: 4px solid #81ecff; border-radius: 50%;
+            transform: translate(-50%, -50%) rotateX(75deg);
+            box-shadow: 0 0 25px #81ecff, inset 0 0 15px #81ecff;
+            opacity: 0; transition: opacity 0.1s linear;
+            pointer-events: none;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #floor-ring::after { content: ''; width: 10px; height: 10px; background: #81ecff; border-radius: 50%; box-shadow: 0 0 10px #81ecff; }
+
+        /* Custom Hotspots */
+        .custom-hotspot { height: 50px; width: 50px; background: rgba(0, 123, 255, 0.4); border: 3px solid #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 0 15px rgba(0,0,0,0.5); transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }
+        .custom-hotspot::after { content: ''; width: 15px; height: 15px; border-top: 5px solid #fff; border-right: 5px solid #fff; transform: rotate(-45deg) translate(-2px, 2px); }
+        .custom-hotspot:hover { background: rgba(0, 123, 255, 0.8); transform: scale(1.2); box-shadow: 0 0 20px #007bff; }
+        
+        /* Hide Stock UI */
+        .pnlm-load-box, .pnlm-loading, .pnlm-about-msg, .pnlm-control-bar, .pnlm-panorama-info, .pnlm-zoom-controls, .pnlm-fullscreen-controls { display: none !important; }
+        
+        /* Custom UI */
+        .loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 10000; flex-direction: column; }
+        .loading-title { font: 700 16px/1.2 'Segoe UI', sans-serif; color: #dbeaff; margin-bottom: 12px; }
+        .loading-progress { width: 300px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+        .loading-progress .fill { height: 100%; width: 0%; background: #4da3ff; transition: width 0.2s; }
+        
+        .top-controls { position: fixed; top: 14px; right: 14px; z-index: 10000; display: flex; gap: 10px; }
+        .control-btn { height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; font-weight: 700; font-family: 'Segoe UI', sans-serif; backdrop-filter: blur(5px); }
+        .control-btn:hover { background: rgba(0,0,0,0.9); border-color: #4da3ff; }
+        
+        .wm-badge { position: fixed; bottom: 14px; right: 14px; background: rgba(0,0,0,0.6); color: #fff; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 10000; border: 1px solid rgba(255,255,255,0.15); display: none; }
     </style>
 </head>
 <body>
-    <div id="canvas-container"></div>
-    <div id="css3d-container"></div>
-    <div id="ui-overlay"><h2 id="scene-title" style="margin: 0; font-weight: 300; letter-spacing: 2px;">LOADING...</h2></div>
-    <div id="debug-info"></div>
-    <div id="watermark"><img src="/img/logo.png" style="height: 40px;" alt="LO" /></div>
-    <div id="loading" class="loading-overlay"><div class="loading-text">INITIALIZING_ENGINE...</div></div>
+    <div id="panorama"></div>
+    <div id="overlay-container"><div id="floor-ring"></div></div>
 
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/",
-            "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.12.5/index.js"
+    <div class="top-controls">
+        <button class="control-btn" id="qualityBtn" style="display:none">WEB</button>
+        <button class="control-btn" onclick="toggleFullscreen()">[ ]</button>
+    </div>
+
+    <div class="loading-overlay" id="tourLoader">
+        <div class="loading-title">LOADING SCENE</div>
+        <div class="loading-progress"><div class="fill" id="tourLoaderBar"></div></div>
+    </div>
+
+    <div class="wm-badge" id="wmBadge">Created with Pan-o-Rama Free</div>
+
+    <script>
+    /*{{TOUR_DATA}}*/
+
+    const sourceData = window.TOUR_DATA || {};
+    const scenes = {};
+    const hiresMap = {};
+    
+    let viewer = null;
+    let qualityMode = localStorage.getItem("tourQualityMode") || "standard";
+    let transitioning = false;
+
+    function init() {
+        if (sourceData.watermark) document.getElementById('wmBadge').style.display = 'block';
+
+        sourceData.scenes.forEach(s => {
+            const baseAsset = s.web || s.studio_web || s.panorama;
+            if (s.panorama && s.panorama !== baseAsset) hiresMap[s.id] = `${s.id}/${s.panorama}`;
+
+            scenes[s.id] = {
+                title: s.name,
+                type: "equirectangular",
+                panorama: `${s.id}/${baseAsset}`,
+                haov: (s.haov !== undefined && s.haov !== null) ? s.haov : 360,
+                vaov: (s.vaov !== undefined && s.vaov !== null) ? s.vaov : 180,
+                hotSpots: (s.hotspots || []).map(hs => ({
+                    pitch: hs.pitch,
+                    yaw: hs.yaw,
+                    cssClass: "custom-hotspot",
+                    clickHandlerFunc: (e, args) => smoothSwitch(args.targetId, hs.pitch, hs.yaw, hs.entry_pitch, hs.entry_yaw),
+                    clickHandlerArgs: { targetId: hs.target_id }
+                }))
+            };
+        });
+
+        const startId = sourceData.settings.start_scene_id || sourceData.scenes[0].id;
+        
+        viewer = pannellum.viewer('panorama', {
+            "default": {
+                "firstScene": startId,
+                "sceneFadeDuration": 1000,
+                "autoLoad": true,
+                "hfov": sourceData.settings.default_hfov || 75,
+                "pitch": sourceData.settings.start_pitch || 0,
+                "yaw": sourceData.settings.start_yaw || 0,
+                "showControls": false,
+                "compass": false
+            },
+            "scenes": scenes
+        });
+
+        viewer.on('load', () => {
+            transitioning = false;
+            document.getElementById('tourLoader').style.display = 'none';
+            updateQualityUI();
+        });
+
+        initFloorRing();
+    }
+
+    function smoothSwitch(targetId, viaPitch, viaYaw, entryPitch, entryYaw) {
+        if (transitioning) return;
+        transitioning = true;
+        const zoomTarget = Math.max(30, viewer.getHfov() - 30);
+        viewer.setHfov(zoomTarget, 800);
+        viewer.lookAt(viaPitch, viaYaw, zoomTarget, 800);
+        setTimeout(() => {
+            document.getElementById('tourLoader').style.display = 'flex';
+            document.getElementById('tourLoaderBar').style.width = '40%';
+            viewer.loadScene(targetId, entryPitch, entryYaw);
+        }, 300);
+    }
+
+    function updateQualityUI() {
+        const btn = document.getElementById('qualityBtn');
+        const curId = viewer.getScene();
+        if (hiresMap[curId]) {
+            btn.style.display = 'block';
+            btn.textContent = qualityMode === "ultra" ? "HD" : "WEB";
+        } else {
+            btn.style.display = 'none';
         }
     }
-    </script>
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-        import gsap from 'gsap';
+    document.getElementById('qualityBtn').onclick = () => {
+        qualityMode = qualityMode === "ultra" ? "standard" : "ultra";
+        localStorage.setItem("tourQualityMode", qualityMode);
+        const curId = viewer.getScene();
+        const view = { pitch: viewer.getPitch(), yaw: viewer.getYaw(), hfov: viewer.getHfov() };
+        const s = sourceData.scenes.find(x => x.id === curId);
+        scenes[curId].panorama = (qualityMode === "ultra" && hiresMap[curId]) ? hiresMap[curId] : `${curId}/${s.web || s.studio_web || s.panorama}`;
+        viewer.loadScene(curId, view.pitch, view.yaw, view.hfov);
+    };
 
-        /*{{TOUR_DATA}}*/
-
-        class AdvancedViewer {
-            constructor(data) {
-                this.data = data || window.TOUR_DATA;
-                this.initEngine();
-                this.initEventListeners();
-                this.start();
+    function initFloorRing() {
+        const ring = document.getElementById('floor-ring');
+        const panoContainer = document.getElementById('panorama');
+        
+        window.addEventListener('mousemove', (e) => {
+            if (!viewer || transitioning) return;
+            const rect = panoContainer.getBoundingClientRect();
+            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+                ring.style.opacity = 0;
+                return;
             }
-
-            initEngine() {
-                this.scene = new THREE.Scene();
-                this.cssScene = new THREE.Scene();
-                const initialFov = this.data.settings.default_hfov || 75;
-                this.camera = new THREE.PerspectiveCamera(initialFov, window.innerWidth / window.innerHeight, 1, 2000);
-                this.camera.target = new THREE.Vector3(0, 0, 0);
-
-                this.renderer = new THREE.WebGLRenderer({ antialias: true });
-                this.renderer.setPixelRatio(window.devicePixelRatio);
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-                document.getElementById('canvas-container').appendChild(this.renderer.domElement);
-
-                this.cssRenderer = new CSS3DRenderer();
-                this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
-                document.getElementById('css3d-container').appendChild(this.cssRenderer.domElement);
-
-                // High tessellation sphere for smooth vertex distortion
-                const geometry = new THREE.SphereGeometry(1000, 128, 64);
-                geometry.scale(-1, 1, 1);
-
-                this.material = new THREE.ShaderMaterial({
-                    uniforms: {
-                        uTex1: { value: new THREE.Texture() },
-                        uTex2: { value: new THREE.Texture() },
-                        uProgress: { value: 0 },
-                        uOpacity: { value: 1 },
-                        uWarp: { value: 0 },
-                        uDistortion: { value: 0.0 }
-                    },
-                    vertexShader: `
-                        varying vec2 vUv;
-                        uniform float uWarp;
-                        uniform float uProgress;
-                        uniform float uDistortion;
-                        void main() {
-                            vUv = uv;
-                            vec3 pos = position;
-                            
-                            // 1. Apply Spatial Warp during transition
-                            if (uProgress > 0.0 && uProgress < 1.0) {
-                                pos.z *= (1.0 + uWarp * sin(uProgress * 3.14159));
-                            }
-                            
-                            // 2. Project to View Space
-                            vec4 viewPos = modelViewMatrix * vec4(pos, 1.0);
-                            
-                            // 3. Apply Lens Correction (Panini-like) in View Space
-                            // This affects how objects look on screen, regardless of where we look on the sphere
-                            if (uDistortion != 0.0) {
-                                float r = length(viewPos.xy) / length(viewPos.xyz);
-                                float factor = 1.0 / (1.0 + uDistortion * r * r);
-                                viewPos.x *= factor;
-                                viewPos.y *= factor;
-                            }
-
-                            gl_Position = projectionMatrix * viewPos;
-                        }
-                    `,
-                    fragmentShader: `
-                        varying vec2 vUv;
-                        uniform sampler2D uTex1;
-                        uniform sampler2D uTex2;
-                        uniform float uProgress;
-                        uniform float uOpacity;
-                        void main() {
-                            vec4 t1 = texture2D(uTex1, vUv);
-                            vec4 t2 = texture2D(uTex2, vUv);
-                            gl_FragColor = mix(t1, t2, uProgress);
-                            gl_FragColor.a *= uOpacity;
-                        }
-                    `,
-                    transparent: true
-                });
-
-                this.mesh = new THREE.Mesh(geometry, this.material);
-                this.scene.add(this.mesh);
-
-                const ringGeo = new THREE.RingGeometry(15, 20, 32);
-                const ringMat = new THREE.MeshBasicMaterial({ color: 0x81ecff, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
-                this.floorCursor = new THREE.Mesh(ringGeo, ringMat);
-                this.floorCursor.rotation.x = -Math.PI / 2;
-                this.floorCursor.position.y = -159; 
-                this.floorCursor.visible = false;
-                this.scene.add(this.floorCursor);
-
-                this.lon = this.data.settings.start_yaw || 0;
-                this.lat = this.data.settings.start_pitch || 0;
-                this.isUserInteracting = false;
-                this.isTransitioning = false;
-                this.keys = {};
-                this.distortion = 0.0;
+            const coords = viewer.mouseEventToCoords(e);
+            if (!coords) return;
+            const pitch = coords[0];
+            if (pitch < -10) {
+                ring.style.opacity = 0.8;
+                ring.style.left = e.clientX + 'px';
+                ring.style.top = e.clientY + 'px';
+                const tilt = Math.max(40, 90 + pitch);
+                ring.style.transform = `translate(-50%, -50%) rotateX(${tilt}deg)`;
+            } else {
+                ring.style.opacity = 0;
             }
+        });
+        window.addEventListener('mousedown', () => ring.style.opacity = 0);
+    }
 
-            initEventListeners() {
-                const raycaster = new THREE.Raycaster();
-                const mouse = new THREE.Vector2();
-                const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 160);
+    function toggleFullscreen() {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+        else if (document.exitFullscreen) document.exitFullscreen();
+    }
 
-                window.addEventListener('mousemove', (e) => {
-                    if (this.isUserInteracting || this.isTransitioning) { this.floorCursor.visible = false; return; }
-                    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-                    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-                    raycaster.setFromCamera(mouse, this.camera);
-                    const intersectPoint = new THREE.Vector3();
-                    if (raycaster.ray.intersectPlane(floorPlane, intersectPoint)) {
-                        this.floorCursor.visible = true;
-                        this.floorCursor.position.copy(intersectPoint);
-                        const dist = this.camera.position.distanceTo(intersectPoint);
-                        const s = Math.max(0.5, dist / 500);
-                        this.floorCursor.scale.set(s, s, s);
-                    } else { this.floorCursor.visible = false; }
-                });
-
-                window.addEventListener('pointerdown', (e) => {
-                    this.isUserInteracting = true;
-                    this.pointerX = e.clientX; this.pointerY = e.clientY;
-                    this.pointerLon = this.lon; this.pointerLat = this.lat;
-                });
-                window.addEventListener('pointermove', (e) => {
-                    if (this.isUserInteracting) {
-                        this.lon = (this.pointerX - e.clientX) * 0.1 + this.pointerLon;
-                        this.lat = (e.clientY - this.pointerY) * 0.1 + this.pointerLat;
-                    }
-                });
-                window.addEventListener('pointerup', () => { this.isUserInteracting = false; });
-                window.addEventListener('wheel', (e) => this.updateZoom(e.deltaY * 0.05));
-                window.addEventListener('keydown', (e) => {
-                    this.keys[e.key] = true;
-                    if (e.key === 'w' && !this.isTransitioning) this.navigateInDirection(0);
-                    if (e.key === 's' && !this.isTransitioning) this.navigateInDirection(180);
-                    if (e.key === 'a' && !this.isTransitioning) this.navigateInDirection(-90);
-                    if (e.key === 'd' && !this.isTransitioning) this.navigateInDirection(90);
-                });
-                window.addEventListener('keyup', (e) => this.keys[e.key] = false);
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
-                    this.cssRenderer.setSize(window.innerWidth, window.innerHeight);
-                });
-            }
-
-            updateZoom(delta) {
-                this.camera.fov = Math.max(10, Math.min(135, this.camera.fov + delta));
-                this.camera.updateProjectionMatrix();
-            }
-
-            navigateInDirection(angleOffset) {
-                const currentYaw = (this.lon + angleOffset) % 360;
-                const scenes = Array.isArray(this.data.scenes) ? this.data.scenes : Object.values(this.data.scenes);
-                const currentScene = scenes.find(s => s.id === this.currentSceneId);
-                if (!currentScene) return;
-                let bestScene = null; let minDiff = 45; 
-                scenes.forEach(s => {
-                    if (s.id === this.currentSceneId) return;
-                    const dx = s.pos.x - currentScene.pos.x; const dz = s.pos.z - currentScene.pos.z;
-                    if (Math.abs(dx) < 0.1 && Math.abs(dz) < 0.1) return; 
-                    const targetYaw = Math.atan2(dx, dz) * (180 / Math.PI);
-                    const diff = Math.abs(((targetYaw - currentYaw + 180 + 360) % 360) - 180);
-                    if (diff < minDiff) { minDiff = diff; bestScene = s; }
-                });
-                if (bestScene) this.loadScene(bestScene.id);
-            }
-
-            async loadScene(sceneId, entryPitch = null, entryYaw = null) {
-                if (this.isTransitioning) return;
-                const scenes = Array.isArray(this.data.scenes) ? this.data.scenes : Object.values(this.data.scenes);
-                const sceneData = scenes.find(s => s.id === sceneId);
-                if (!sceneData) return;
-                document.getElementById('scene-title').textContent = (sceneData.name || "UNTITLED").toUpperCase();
-                const loader = new THREE.TextureLoader();
-                const url = `/galleries/${this.data.id}/${sceneId}/${sceneData.web || sceneData.panorama}`;
-                const newTexture = await loader.loadAsync(url);
-                newTexture.colorSpace = THREE.SRGBColorSpace;
-                if (this.currentSceneId) {
-                    this.isTransitioning = true;
-                    this.material.uniforms.uTex2.value = newTexture;
-                    this.material.uniforms.uWarp.value = 0.5;
-                    gsap.to(this.material.uniforms.uProgress, {
-                        value: 1, duration: 0.8, ease: "power2.inOut",
-                        onComplete: () => {
-                            const oldTex = this.material.uniforms.uTex1.value;
-                            if (oldTex) oldTex.dispose();
-                            this.material.uniforms.uTex1.value = newTexture;
-                            this.material.uniforms.uProgress.value = 0;
-                            this.material.uniforms.uWarp.value = 0;
-                            this.isTransitioning = false;
-                        }
-                    });
-                } else {
-                    this.material.uniforms.uTex1.value = newTexture;
-                    document.getElementById('loading').style.opacity = '0';
-                    setTimeout(() => document.getElementById('loading').remove(), 500);
-                }
-                this.currentSceneId = sceneId;
-                if (entryYaw !== null) this.lon = entryYaw;
-                if (entryPitch !== null) this.lat = entryPitch;
-                this.updateHotspots(sceneData.hotspots);
-            }
-
-            updateHotspots(hotspots) {
-                while(this.cssScene.children.length > 0) this.cssScene.remove(this.cssScene.children[0]);
-                hotspots.forEach(hs => {
-                    const el = document.createElement('div');
-                    el.className = 'hotspot-arrow';
-                    el.onclick = () => this.loadScene(hs.target_id, hs.entry_pitch, hs.entry_yaw);
-                    const obj = new CSS3DObject(el);
-                    const p = THREE.MathUtils.degToRad(hs.pitch);
-                    const y = THREE.MathUtils.degToRad(hs.yaw);
-                    if (hs.pitch < -10) {
-                        const H = 160; const r = H / Math.tan(-p);
-                        obj.position.set(r * Math.sin(y), -H, r * Math.cos(y));
-                        obj.rotation.x = -Math.PI / 2; obj.rotation.z = -y;
-                    } else {
-                        const R = 900;
-                        obj.position.set(R * Math.cos(p) * Math.sin(y), R * Math.sin(p), R * Math.cos(p) * Math.cos(y));
-                        obj.lookAt(0, 0, 0);
-                    }
-                    this.cssScene.add(obj);
-                });
-            }
-
-            animate() {
-                requestAnimationFrame(() => this.animate());
-                const rotSpeed = 1.5; const fisheyeSpeed = 0.01;
-                if (this.keys['ArrowLeft']) this.lon -= rotSpeed;
-                if (this.keys['ArrowRight']) this.lon += rotSpeed;
-                if (this.keys['ArrowUp']) this.lat += rotSpeed;
-                if (this.keys['ArrowDown']) this.lat -= rotSpeed;
-                if (this.keys['+'] || this.keys['=']) this.updateZoom(-1.0);
-                if (this.keys['-'] || this.keys['_']) this.updateZoom(1.0);
-                if (this.keys['[']) this.distortion = Math.max(-0.5, this.distortion - fisheyeSpeed);
-                if (this.keys[']']) this.distortion = Math.min(2, this.distortion + fisheyeSpeed);
-                this.material.uniforms.uDistortion.value = this.distortion;
-                if (this.keys['['] || this.keys[']']) document.getElementById('debug-info').textContent = `CORRECTION: ${this.distortion.toFixed(3)}`;
-                this.lat = Math.max(-85, Math.min(85, this.lat));
-                const phi = THREE.MathUtils.degToRad(90 - this.lat);
-                const theta = THREE.MathUtils.degToRad(this.lon);
-                this.camera.target.set(500 * Math.sin(phi) * Math.cos(theta), 500 * Math.cos(phi), 500 * Math.sin(phi) * Math.sin(theta));
-                this.camera.lookAt(this.camera.target);
-                this.renderer.render(this.scene, this.camera);
-                this.cssRenderer.render(this.cssScene, this.camera);
-            }
-
-            start() {
-                const scenes = Array.isArray(this.data.scenes) ? this.data.scenes : Object.values(this.data.scenes);
-                if (!scenes || scenes.length === 0) return;
-                this.loadScene(this.data.settings.start_scene_id || scenes[0].id);
-                this.animate();
-            }
-        }
-        window.ViewerInstance = new AdvancedViewer();
+    document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>
