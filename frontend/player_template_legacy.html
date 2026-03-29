@@ -157,6 +157,7 @@
 </head>
 <body>
     <div id="panorama"></div>
+    <audio id="sceneAudioPlayer" loop preload="auto" style="display:none;"></audio>
     <div class="top-controls">
         <div class="quality-nav" id="qualityNav" style="display:none;">
             <button class="control-btn" id="qualityBtn" type="button" aria-label="Quality">Web</button>
@@ -186,10 +187,12 @@
     const sourceData = window.TOUR_DATA || {};
     const sourceScenes = Array.isArray(sourceData.scenes) ? sourceData.scenes : [];
     const sourceSettings = sourceData.settings || {};
+    const sourceSceneMap = {};
     const prefetchCache = new Set();
     const previewMap = {};
     const hiresMap = {};
     const sceneState = {};
+    const sceneAudioPlayer = document.getElementById("sceneAudioPlayer");
 
     let loadTimer = null;
     let loadPct = 0;
@@ -198,6 +201,8 @@
     let qualityMode = QUALITY_STANDARD;
     let viewerReady = false;
     let pendingView = null;
+    let currentAudioBaseId = null;
+    let pendingAudioBaseId = null;
 
     function previewSceneId(baseId) {
         return `${baseId}${PREVIEW_SUFFIX}`;
@@ -233,6 +238,11 @@
     function getPreviewAsset(scene) {
         if (!scene) return "";
         return scene.preview || "";
+    }
+
+    function getAudioAsset(scene) {
+        if (!scene) return "";
+        return scene.audio || "";
     }
 
     function setLoader(show, text) {
@@ -340,6 +350,7 @@
 
         sourceScenes.forEach((scene) => {
             if (!scene || !scene.id) return;
+            sourceSceneMap[scene.id] = scene;
             const baseAsset = getSceneAsset(scene);
             if (!baseAsset) return;
 
@@ -358,6 +369,7 @@
                 haov: Math.min(360, Math.max(30, Number(scene.haov || 360))),
                 vaov: Math.min(180, Math.max(30, Number(scene.vaov || 180))),
                 panorama: `${scene.id}/${baseAsset}`,
+                audio: getAudioAsset(scene) ? `${scene.id}/${getAudioAsset(scene)}` : "",
                 hotSpots: (scene.hotspots || []).map((hs) => ({
                     pitch: hs.pitch,
                     yaw: hs.yaw,
@@ -408,6 +420,57 @@
             },
             scenes
         };
+    }
+
+    async function tryPlaySceneAudio() {
+        if (!sceneAudioPlayer || !pendingAudioBaseId) return;
+        const baseId = pendingAudioBaseId;
+        const scene = tourConfig.scenes[baseId];
+        const audioSrc = scene && scene.audio ? scene.audio : "";
+        if (!audioSrc) {
+            pendingAudioBaseId = null;
+            currentAudioBaseId = null;
+            sceneAudioPlayer.pause();
+            sceneAudioPlayer.removeAttribute("src");
+            sceneAudioPlayer.load();
+            return;
+        }
+        if (sceneAudioPlayer.getAttribute("src") !== audioSrc) {
+            sceneAudioPlayer.src = audioSrc;
+        }
+        try {
+            await sceneAudioPlayer.play();
+            currentAudioBaseId = baseId;
+            pendingAudioBaseId = null;
+        } catch (_) {}
+    }
+
+    function syncSceneAudio(sceneId) {
+        if (!sceneAudioPlayer) return;
+        const baseId = baseSceneId(sceneId);
+        if (!baseId) return;
+        const scene = tourConfig.scenes[baseId];
+        const audioSrc = scene && scene.audio ? scene.audio : "";
+
+        if (!audioSrc) {
+            pendingAudioBaseId = null;
+            currentAudioBaseId = null;
+            sceneAudioPlayer.pause();
+            sceneAudioPlayer.removeAttribute("src");
+            sceneAudioPlayer.load();
+            return;
+        }
+
+        if (currentAudioBaseId === baseId && sceneAudioPlayer.getAttribute("src") === audioSrc) {
+            return;
+        }
+
+        sceneAudioPlayer.loop = true;
+        if (sceneAudioPlayer.getAttribute("src") !== audioSrc) {
+            sceneAudioPlayer.src = audioSrc;
+        }
+        pendingAudioBaseId = baseId;
+        void tryPlaySceneAudio();
     }
 
     function prefetchScene(sceneId) {
@@ -613,6 +676,7 @@
 
     window.viewer.on("scenechange", (sceneId) => {
         prefetchLinkedScenes(baseSceneId(sceneId));
+        syncSceneAudio(sceneId);
         updateQualityUI();
     });
 
@@ -694,6 +758,12 @@
             applyQualityMode(qualityMode === QUALITY_ULTRA ? QUALITY_STANDARD : QUALITY_ULTRA);
         });
     }
+
+    ["click", "touchstart", "keydown"].forEach((eventName) => {
+        document.addEventListener(eventName, () => {
+            void tryPlaySceneAudio();
+        }, { passive: eventName !== "keydown" });
+    });
 
     if (tourConfig.default.firstScene) {
         scheduleViewEnforcement({

@@ -15,6 +15,7 @@ DB_PATH = os.path.join(DATA_DIR, "app.db")
 
 # File Config
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+ALLOWED_AUDIO_EXTENSIONS = {"mp3", "ogg", "wav", "m4a", "aac"}
 MAX_CONTENT_LENGTH = 1024 * 1024 * 1024 
 
 # Filenames

@@ -68,6 +68,7 @@ def init_db():
                 tour_id TEXT NOT NULL,
                 title TEXT NOT NULL,
                 panorama_path TEXT,
+                audio_path TEXT,
                 preview_path TEXT,
                 images_json TEXT NOT NULL DEFAULT '[]',
                 order_index INTEGER NOT NULL,
@@ -217,6 +218,8 @@ def init_db():
         scene_cols = [r[1] for r in db.execute("PRAGMA table_info(scenes)").fetchall()]
         if "preview_path" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN preview_path TEXT")
+        if "audio_path" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN audio_path TEXT")
         if "processing_status" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'ready'")
         if "processing_error" not in scene_cols:

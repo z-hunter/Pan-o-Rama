@@ -119,6 +119,10 @@
             background: var(--bg-sidebar);
             color: var(--text);
         }
+        .file-trigger-disabled {
+            opacity: 0.45;
+            pointer-events: none;
+        }
         .tour-scene-list { margin-bottom: 24px; }
         .tour-section-title { margin-bottom: 16px; }
 
@@ -178,6 +182,18 @@
                     </div>
                     <h3 class="mt-8 mb-6">Starting Point</h3>
                     <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set Current View as Start</button>
+                    <div class="card studio-card mt-8" style="background-color: var(--bg-app);">
+                        <h3 class="mb-4">Scene Audio</h3>
+                        <p id="sceneAudioSelection" class="muted mono mb-4" style="font-size: 11px;">Select a scene to attach audio.</p>
+                        <div id="sceneAudioState" class="mb-4"></div>
+                        <div class="flex gap-2" style="flex-wrap: wrap;">
+                            <label class="btn btn-secondary btn-sm file-trigger-disabled" id="sceneAudioUploadBtn" for="sceneAudioFile" aria-disabled="true">Add Audio File</label>
+                            <button class="btn btn-secondary btn-sm" id="sceneAudioPreviewBtn" type="button" onclick="toggleSceneAudioPreview()" disabled>Preview</button>
+                            <button class="btn btn-danger btn-sm" id="sceneAudioRemoveBtn" type="button" onclick="removeSceneAudio()" disabled>Remove Audio</button>
+                        </div>
+                        <input type="file" id="sceneAudioFile" accept=".mp3,.ogg,.wav,.m4a,.aac,audio/*" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;">
+                        <audio id="sceneAudioPreview" style="display:none;"></audio>
+                    </div>
                 </div>
             </div>
 
@@ -261,6 +277,7 @@
         let viewerLoadingProgress = 0;
         let pendingSceneLoadId = null;
         const jobPollers = new Map();
+        let previewAudioSceneId = null;
 
         function getTourIdFromQuery() {
             return new URLSearchParams(window.location.search).get('tour_id');
@@ -500,11 +517,13 @@
             list.innerHTML = '';
             scenes.forEach(s => {
                 const isReady = !s.processing_status || s.processing_status === 'ready';
+                const audioBadge = s.audio ? `<span class="badge" style="background: rgba(129, 236, 255, 0.12); color: var(--primary); border: 1px solid rgba(129, 236, 255, 0.22);">AUDIO</span>` : '';
                 const div = document.createElement('div');
                 div.className = 'scene-item' + (activeSceneId === s.id ? ' active' : '');
                 div.innerHTML = `
                     <div style="flex:1; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="loadScene('${s.id}')">
                         <div class="badge ${isReady?'badge-success':'badge-warning'}">${isReady?'OK':'BUSY'}</div>
+                        ${audioBadge}
                         <span class="mono" style="font-size:11px;">${s.name}</span>
                     </div>
                     ${allowDelete ? `<button class="btn btn-sm btn-danger" style="padding:2px 6px; border:0;" onclick="deleteScene('${s.id}')">×</button>` : ``}
@@ -545,6 +564,125 @@
             document.getElementById('tour-empty-state').style.display = scenes.length > 0 ? 'none' : 'block';
             document.getElementById('tour-controls').style.display = scenes.length > 0 ? 'block' : 'none';
             populateIncomingLinksSelect();
+            updateSceneAudioUI();
+        }
+
+        function getActiveScene() {
+            return scenes.find((scene) => scene.id === activeSceneId) || null;
+        }
+
+        function updateSceneAudioUI() {
+            const selectionEl = document.getElementById('sceneAudioSelection');
+            const stateEl = document.getElementById('sceneAudioState');
+            const uploadBtn = document.getElementById('sceneAudioUploadBtn');
+            const previewBtn = document.getElementById('sceneAudioPreviewBtn');
+            const removeBtn = document.getElementById('sceneAudioRemoveBtn');
+            const audioEl = document.getElementById('sceneAudioPreview');
+            const activeScene = getActiveScene();
+
+            if (!selectionEl || !stateEl || !uploadBtn || !previewBtn || !removeBtn || !audioEl) return;
+
+            if (!activeScene) {
+                selectionEl.textContent = 'Select a scene to attach audio.';
+                stateEl.innerHTML = '<p class="muted mono" style="font-size:11px;">Optional ambient sound for the currently selected scene.</p>';
+                uploadBtn.classList.add('file-trigger-disabled');
+                uploadBtn.setAttribute('aria-disabled', 'true');
+                previewBtn.disabled = true;
+                removeBtn.disabled = true;
+                if (!audioEl.paused) audioEl.pause();
+                audioEl.removeAttribute('src');
+                audioEl.load();
+                previewBtn.textContent = 'Preview';
+                previewAudioSceneId = null;
+                return;
+            }
+
+            selectionEl.textContent = `Selected scene: ${activeScene.name}`;
+            uploadBtn.classList.remove('file-trigger-disabled');
+            uploadBtn.setAttribute('aria-disabled', 'false');
+
+            if (activeScene.audio) {
+                stateEl.innerHTML = `<p class="mono" style="font-size:11px;">${activeScene.audio_name || activeScene.audio}</p>`;
+                previewBtn.disabled = false;
+                removeBtn.disabled = false;
+                previewBtn.textContent = (!audioEl.paused && previewAudioSceneId === activeScene.id) ? 'Stop Preview' : 'Preview';
+            } else {
+                stateEl.innerHTML = '<p class="muted mono" style="font-size:11px;">No audio attached yet. Supported: MP3, OGG, WAV, M4A, AAC.</p>';
+                previewBtn.disabled = true;
+                removeBtn.disabled = true;
+                if (previewAudioSceneId === activeScene.id && !audioEl.paused) {
+                    audioEl.pause();
+                    audioEl.currentTime = 0;
+                    previewAudioSceneId = null;
+                }
+                previewBtn.textContent = 'Preview';
+            }
+        }
+
+        async function uploadSceneAudio(file) {
+            const activeScene = getActiveScene();
+            if (!activeScene || !file) return;
+
+            const formData = new FormData();
+            formData.append('audio', file);
+            const out = await apiFetch(`/scenes/${activeScene.id}/audio`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (out && out.res.ok && out.data.scene) {
+                const idx = scenes.findIndex((scene) => scene.id === activeScene.id);
+                if (idx >= 0) scenes[idx] = out.data.scene;
+                updateScenesUI();
+                showToast('Scene audio saved', 'success');
+            } else {
+                showToast(out?.data?.error || 'Failed to save scene audio', 'error');
+            }
+        }
+
+        async function removeSceneAudio() {
+            const activeScene = getActiveScene();
+            if (!activeScene || !activeScene.audio) return;
+            const out = await apiFetch(`/scenes/${activeScene.id}/audio`, { method: 'DELETE' });
+            if (out && out.res.ok && out.data.scene) {
+                const idx = scenes.findIndex((scene) => scene.id === activeScene.id);
+                if (idx >= 0) scenes[idx] = out.data.scene;
+                const audioEl = document.getElementById('sceneAudioPreview');
+                if (audioEl) {
+                    audioEl.pause();
+                    audioEl.removeAttribute('src');
+                    audioEl.load();
+                }
+                previewAudioSceneId = null;
+                updateScenesUI();
+                showToast('Scene audio removed', 'success');
+            } else {
+                showToast(out?.data?.error || 'Failed to remove scene audio', 'error');
+            }
+        }
+
+        function toggleSceneAudioPreview() {
+            const activeScene = getActiveScene();
+            const audioEl = document.getElementById('sceneAudioPreview');
+            const previewBtn = document.getElementById('sceneAudioPreviewBtn');
+            if (!activeScene || !activeScene.audio || !audioEl || !previewBtn) return;
+
+            const audioUrl = `/galleries/${projectId}/${activeScene.id}/${activeScene.audio}`;
+            if (!audioEl.paused && previewAudioSceneId === activeScene.id) {
+                audioEl.pause();
+                audioEl.currentTime = 0;
+                previewAudioSceneId = null;
+                previewBtn.textContent = 'Preview';
+                return;
+            }
+
+            audioEl.src = audioUrl;
+            audioEl.currentTime = 0;
+            audioEl.play().then(() => {
+                previewAudioSceneId = activeScene.id;
+                previewBtn.textContent = 'Stop Preview';
+            }).catch(() => {
+                showToast('Preview playback was blocked by the browser.', 'error');
+            });
         }
 
         async function deleteScene(sceneId) {
@@ -736,6 +874,17 @@
         }
 
         async function logout() { await apiFetch('/auth/logout', { method: 'POST' }); location.href = '/login.html'; }
+
+        document.getElementById('sceneAudioFile').addEventListener('change', async (event) => {
+            const [file] = event.target.files || [];
+            if (file) await uploadSceneAudio(file);
+            event.target.value = '';
+        });
+
+        document.getElementById('sceneAudioPreview').addEventListener('ended', () => {
+            previewAudioSceneId = null;
+            updateSceneAudioUI();
+        });
 
         (async function bootstrap() {
             await loadCurrentUser();

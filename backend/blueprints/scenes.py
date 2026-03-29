@@ -5,12 +5,36 @@ from flask import Blueprint, request, jsonify, g, current_app
 from werkzeug.utils import secure_filename
 
 from backend.core.database import get_db
-from backend.core.config import ALLOWED_EXTENSIONS
+from backend.core.config import ALLOWED_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS
 from backend.core.auth import require_auth
 from backend.core.models import (
     now_iso, serialize_scene, natural_sort_key, parse_optional_float
 )
-from backend.services.tour_service import fetch_tour_with_access
+from backend.services.tour_service import (
+    fetch_tour_with_access,
+    load_tour_scenes_and_hotspots,
+    generate_tour,
+)
+
+def _regenerate_published_tour_if_needed(tour_id, owner_id):
+    db = get_db()
+    tour_row = db.execute("SELECT * FROM tours WHERE id = ?", (tour_id,)).fetchone()
+    if not tour_row:
+        return
+    gallery_index = os.path.join(current_app.config["PROCESSED_FOLDER"], tour_id, "index.html")
+    if tour_row["status"] != "published" and not os.path.exists(gallery_index):
+        return
+    scenes_data = load_tour_scenes_and_hotspots(tour_id)
+    if not scenes_data:
+        return
+    from backend.services.billing_service import get_user_entitlements
+    ent = get_user_entitlements(owner_id)
+    generate_tour(
+        tour_id,
+        scenes_data,
+        watermark_enabled=ent["watermark_enabled"],
+        tour_settings=tour_row,
+    )
 
 scenes = Blueprint('scenes', __name__)
 
@@ -136,6 +160,89 @@ def scenes_delete(scene_id):
     db.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
     db.commit()
     return jsonify({"message": "Deleted"}), 200
+
+@scenes.route("/<scene_id>/audio", methods=["POST"])
+@require_auth
+def scene_audio_upload(scene_id):
+    db = get_db()
+    row = db.execute(
+        "SELECT s.*, t.owner_id FROM scenes s JOIN tours t ON t.id = s.tour_id WHERE s.id = ?",
+        (scene_id,)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+
+    audio_file = request.files.get("audio")
+    if not audio_file or not audio_file.filename:
+        return jsonify({"error": "No audio file uploaded"}), 400
+
+    ext = audio_file.filename.rsplit(".", 1)[-1].lower() if "." in audio_file.filename else ""
+    if ext not in ALLOWED_AUDIO_EXTENSIONS:
+        return jsonify({"error": "Unsupported audio format"}), 400
+
+    proc_dir = os.path.join(current_app.config["PROCESSED_FOLDER"], row["tour_id"], row["id"])
+    os.makedirs(proc_dir, exist_ok=True)
+
+    existing_audio = (row["audio_path"] or "").strip()
+    if existing_audio:
+        existing_path = os.path.join(proc_dir, existing_audio)
+        if os.path.exists(existing_path):
+            try:
+                os.remove(existing_path)
+            except OSError:
+                current_app.logger.warning("Failed to remove existing audio for scene %s", scene_id)
+
+    filename = secure_filename(audio_file.filename)
+    stored_name = f"audio_{filename}"
+    audio_file.save(os.path.join(proc_dir, stored_name))
+
+    ts = now_iso()
+    db.execute(
+        "UPDATE scenes SET audio_path = ?, updated_at = ? WHERE id = ?",
+        (stored_name, ts, scene_id)
+    )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, row["tour_id"]))
+    db.commit()
+    _regenerate_published_tour_if_needed(row["tour_id"], row["owner_id"])
+
+    updated = db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    return jsonify({"scene": serialize_scene(updated)}), 200
+
+@scenes.route("/<scene_id>/audio", methods=["DELETE"])
+@require_auth
+def scene_audio_delete(scene_id):
+    db = get_db()
+    row = db.execute(
+        "SELECT s.*, t.owner_id FROM scenes s JOIN tours t ON t.id = s.tour_id WHERE s.id = ?",
+        (scene_id,)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    if row["owner_id"] != g.current_user["id"]:
+        return jsonify({"error": "Forbidden"}), 403
+
+    audio_path = (row["audio_path"] or "").strip()
+    if audio_path:
+        file_path = os.path.join(current_app.config["PROCESSED_FOLDER"], row["tour_id"], row["id"], audio_path)
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                current_app.logger.warning("Failed to remove audio file for scene %s", scene_id)
+
+    ts = now_iso()
+    db.execute(
+        "UPDATE scenes SET audio_path = NULL, updated_at = ? WHERE id = ?",
+        (ts, scene_id)
+    )
+    db.execute("UPDATE tours SET updated_at = ? WHERE id = ?", (ts, row["tour_id"]))
+    db.commit()
+    _regenerate_published_tour_if_needed(row["tour_id"], row["owner_id"])
+
+    updated = db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    return jsonify({"scene": serialize_scene(updated)}), 200
 
 @scenes.route("/hotspots/<hotspot_id>", methods=["PATCH"])
 @require_auth

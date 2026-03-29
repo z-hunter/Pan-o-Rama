@@ -144,6 +144,8 @@ def serialize_scene(row):
         "tour_id": row["tour_id"],
         "name": row["title"],
         "panorama": row["panorama_path"],
+        "audio": row["audio_path"] if "audio_path" in row.keys() else None,
+        "audio_name": os.path.basename(row["audio_path"]) if ("audio_path" in row.keys() and row["audio_path"]) else None,
         "web": full_web_pano or studio_web_pano,
         "studio_web": studio_web_pano,
         "preview": row["preview_path"],
