@@ -574,7 +574,7 @@
             : ((sceneState[baseId] && typeof sceneState[baseId].hfov === "number") ? sceneState[baseId].hfov : defaultHfov());
 
         const previewId = previewMap[baseId] ? previewSceneId(baseId) : null;
-        const fullId = (qualityMode === QUALITY_ULTRA && hiresMap[baseId]) ? hiresSceneId(baseId) : baseId;
+        const fullId = baseId;
 
         switchReq = {
             baseId,
@@ -599,28 +599,6 @@
         }
     }
 
-    function maybeUpgradeToUltra() {
-        if (qualityMode !== QUALITY_ULTRA || !window.viewer || !window.viewer.getScene) return;
-        cancelBackgroundUltraUpgrade();
-        const currentId = window.viewer.getScene();
-        if (isPreviewSceneId(currentId) || isHiresSceneId(currentId)) return;
-        const baseId = baseSceneId(currentId);
-        if (!baseId || !hiresMap[baseId]) return;
-        const view = getCurrentView();
-        switchReq = {
-            baseId,
-            previewId: null,
-            fullId: hiresSceneId(baseId),
-            pitch: view.pitch,
-            yaw: view.yaw,
-            hfov: view.hfov
-        };
-        scheduleViewEnforcement(view);
-        transitioning = true;
-        beginSceneLoading("Loading HD...");
-        safeLoadSceneWithView(hiresSceneId(baseId), view.pitch, view.yaw, view.hfov);
-    }
-
     function applyQualityMode(mode) {
         qualityMode = mode === QUALITY_ULTRA ? QUALITY_ULTRA : QUALITY_STANDARD;
         cancelBackgroundUltraUpgrade();
@@ -639,8 +617,8 @@
 
         if (qualityMode === QUALITY_STANDARD && isHiresSceneId(currentId)) {
             requestSceneSwitch(baseId, view.pitch, view.yaw, view.hfov);
-        } else if (qualityMode === QUALITY_ULTRA && !isHiresSceneId(currentId) && hiresMap[baseId]) {
-            maybeUpgradeToUltra();
+        } else if (qualityMode === QUALITY_ULTRA && !isPreviewSceneId(currentId) && !isHiresSceneId(currentId) && hiresMap[baseId]) {
+            queueBackgroundUltraUpgrade(baseId);
         }
 
         updateQualityUI();
@@ -741,14 +719,9 @@
             const next = Object.assign({}, switchReq);
             transitioning = false;
             endSceneLoading();
-            if (qualityMode === QUALITY_ULTRA && hiresMap[next.baseId] && next.fullId === hiresSceneId(next.baseId)) {
-                switchReq = null;
-                queueBackgroundUltraUpgrade(next.baseId);
-                return;
-            }
             setTimeout(() => {
                 if (!switchReq || switchReq.baseId !== next.baseId) return;
-                beginSceneLoading(qualityMode === QUALITY_ULTRA && hiresMap[next.baseId] ? "Loading HD..." : "Loading scene...");
+                beginSceneLoading("Loading scene...");
                 safeLoadSceneWithView(next.fullId, next.pitch, next.yaw, next.hfov);
             }, 90);
             return;
