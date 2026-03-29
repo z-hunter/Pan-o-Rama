@@ -203,6 +203,7 @@
     let pendingView = null;
     let currentAudioBaseId = null;
     let pendingAudioBaseId = null;
+    let backgroundUpgradeToken = 0;
 
     function previewSceneId(baseId) {
         return `${baseId}${PREVIEW_SUFFIX}`;
@@ -493,6 +494,53 @@
         });
     }
 
+    function cancelBackgroundUltraUpgrade() {
+        backgroundUpgradeToken += 1;
+    }
+
+    function queueBackgroundUltraUpgrade(baseId) {
+        if (qualityMode !== QUALITY_ULTRA || !window.viewer || !baseId || !hiresMap[baseId]) return;
+        const targetSceneId = hiresSceneId(baseId);
+        const targetScene = tourConfig.scenes[targetSceneId];
+        if (!targetScene || !targetScene.panorama) return;
+
+        const token = ++backgroundUpgradeToken;
+        const img = new Image();
+        img.onload = async () => {
+            try {
+                if (typeof img.decode === "function") {
+                    await img.decode();
+                }
+            } catch (_) {}
+
+            if (!window.viewer || token !== backgroundUpgradeToken) return;
+
+            const currentSceneId = (() => {
+                try { return window.viewer.getScene(); } catch (_) { return null; }
+            })();
+            if (!currentSceneId || baseSceneId(currentSceneId) !== baseId || isHiresSceneId(currentSceneId)) return;
+
+            const view = getCurrentView();
+            switchReq = {
+                baseId,
+                previewId: null,
+                fullId: targetSceneId,
+                pitch: view.pitch,
+                yaw: view.yaw,
+                hfov: view.hfov,
+                background: true
+            };
+            scheduleViewEnforcement(view);
+            safeLoadSceneWithView(targetSceneId, view.pitch, view.yaw, view.hfov);
+        };
+        img.onerror = () => {
+            if (token === backgroundUpgradeToken) {
+                switchReq = null;
+            }
+        };
+        img.src = targetScene.panorama;
+    }
+
     function safeLoadSceneWithView(sceneId, pitch, yaw, hfov) {
         if (!window.viewer || !sceneId) return;
         window.viewer.loadScene(sceneId, pitch, yaw, hfov);
@@ -519,6 +567,7 @@
     function requestSceneSwitch(targetSceneId, pitch, yaw, hfov) {
         const baseId = baseSceneId(targetSceneId);
         if (!baseId) return;
+        cancelBackgroundUltraUpgrade();
 
         const desiredHfov = typeof hfov === "number"
             ? hfov
@@ -552,6 +601,7 @@
 
     function maybeUpgradeToUltra() {
         if (qualityMode !== QUALITY_ULTRA || !window.viewer || !window.viewer.getScene) return;
+        cancelBackgroundUltraUpgrade();
         const currentId = window.viewer.getScene();
         if (isPreviewSceneId(currentId) || isHiresSceneId(currentId)) return;
         const baseId = baseSceneId(currentId);
@@ -573,6 +623,7 @@
 
     function applyQualityMode(mode) {
         qualityMode = mode === QUALITY_ULTRA ? QUALITY_ULTRA : QUALITY_STANDARD;
+        cancelBackgroundUltraUpgrade();
         try {
             localStorage.setItem("tourQualityMode", qualityMode);
         } catch (_) {}
@@ -690,6 +741,11 @@
             const next = Object.assign({}, switchReq);
             transitioning = false;
             endSceneLoading();
+            if (qualityMode === QUALITY_ULTRA && hiresMap[next.baseId] && next.fullId === hiresSceneId(next.baseId)) {
+                switchReq = null;
+                queueBackgroundUltraUpgrade(next.baseId);
+                return;
+            }
             setTimeout(() => {
                 if (!switchReq || switchReq.baseId !== next.baseId) return;
                 beginSceneLoading(qualityMode === QUALITY_ULTRA && hiresMap[next.baseId] ? "Loading HD..." : "Loading scene...");
@@ -723,6 +779,15 @@
         transitioning = false;
         updateQualityUI();
         endSceneLoading();
+
+        if (
+            qualityMode === QUALITY_ULTRA &&
+            currentBaseId &&
+            !isPreviewSceneId(rawSceneId) &&
+            !isHiresSceneId(rawSceneId)
+        ) {
+            queueBackgroundUltraUpgrade(currentBaseId);
+        }
     });
 
     const panoEl = document.getElementById("panorama");
