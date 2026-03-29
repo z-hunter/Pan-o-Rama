@@ -599,6 +599,28 @@
         }
     }
 
+    function upgradeCurrentSceneToUltra() {
+        if (qualityMode !== QUALITY_ULTRA || !window.viewer || !window.viewer.getScene) return;
+        cancelBackgroundUltraUpgrade();
+        const currentId = window.viewer.getScene();
+        if (isPreviewSceneId(currentId) || isHiresSceneId(currentId)) return;
+        const baseId = baseSceneId(currentId);
+        if (!baseId || !hiresMap[baseId]) return;
+        const view = getCurrentView();
+        switchReq = {
+            baseId,
+            previewId: null,
+            fullId: hiresSceneId(baseId),
+            pitch: view.pitch,
+            yaw: view.yaw,
+            hfov: view.hfov
+        };
+        scheduleViewEnforcement(view);
+        transitioning = true;
+        beginSceneLoading("Loading HD...");
+        safeLoadSceneWithView(hiresSceneId(baseId), view.pitch, view.yaw, view.hfov);
+    }
+
     function applyQualityMode(mode) {
         qualityMode = mode === QUALITY_ULTRA ? QUALITY_ULTRA : QUALITY_STANDARD;
         cancelBackgroundUltraUpgrade();
@@ -618,7 +640,7 @@
         if (qualityMode === QUALITY_STANDARD && isHiresSceneId(currentId)) {
             requestSceneSwitch(baseId, view.pitch, view.yaw, view.hfov);
         } else if (qualityMode === QUALITY_ULTRA && !isPreviewSceneId(currentId) && !isHiresSceneId(currentId) && hiresMap[baseId]) {
-            queueBackgroundUltraUpgrade(baseId);
+            upgradeCurrentSceneToUltra();
         }
 
         updateQualityUI();
@@ -753,14 +775,6 @@
         updateQualityUI();
         endSceneLoading();
 
-        if (
-            qualityMode === QUALITY_ULTRA &&
-            currentBaseId &&
-            !isPreviewSceneId(rawSceneId) &&
-            !isHiresSceneId(rawSceneId)
-        ) {
-            queueBackgroundUltraUpgrade(currentBaseId);
-        }
     });
 
     const panoEl = document.getElementById("panorama");
