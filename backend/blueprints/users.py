@@ -19,6 +19,7 @@ def me_get():
             "email": u["email"],
             "email_verified": bool(int(u["email_verified"] or 0)),
             "display_name": u["display_name"],
+            "is_admin": bool(int(u["is_admin"] or 0)),
             "plan": {
                 "id": ent["plan_id"],
                 "name": ent["plan_name"],

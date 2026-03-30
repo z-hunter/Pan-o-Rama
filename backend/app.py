@@ -89,6 +89,11 @@ def create_app():
     def dashboard_page():
         return send_from_directory(FRONTEND_FOLDER, 'dashboard.html')
 
+    @app.route('/tour-manager')
+    @app.route('/tour-manager.html')
+    def tour_manager_page():
+        return send_from_directory(FRONTEND_FOLDER, 'tour_manager.html')
+
     @app.route('/account')
     @app.route('/account.html')
     def account_page():

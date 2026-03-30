@@ -1,12 +1,17 @@
 debug/
+.planning/
+.playwright-cli/
+.venv/
 venv/
 __pycache__/
 *.log
+output/
 data/raw_uploads/*
 data/processed_galleries/*
 data/app.db
 data/app.db-shm
 data/app.db-wal
+backend/database.db
 .gemini/
 backend/flask_app.log
 backend/venv/

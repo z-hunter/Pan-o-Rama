@@ -13,7 +13,7 @@ from backend.core.config import (
     PLAN_FREE, PLAN_PRO, PLAN_BUSINESS, ALLOWED_EXTENSIONS, 
     UPLOAD_FOLDER, PROCESSED_FOLDER, COVER_FILENAME
 )
-from backend.core.auth import require_auth
+from backend.core.auth import require_auth, require_admin, current_user_is_admin
 from backend.core.models import (
     now_iso, serialize_tour, slugify, normalize_visibility, 
     parse_optional_float, natural_sort_key
@@ -69,6 +69,32 @@ def tours_my():
     ).fetchall()
     return jsonify({"tours": [serialize_tour(r) for r in rows]}), 200
 
+@tours.route("/admin/all", methods=["GET"])
+@require_admin
+def tours_admin_all():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT t.*, u.email AS owner_email, u.display_name AS owner_display_name
+        FROM tours t
+        JOIN users u ON u.id = t.owner_id
+        ORDER BY
+            CASE
+                WHEN t.deleted_at IS NULL THEN 0
+                ELSE 1
+            END,
+            t.updated_at DESC
+        """
+    ).fetchall()
+    tours_payload = []
+    for row in rows:
+        item = serialize_tour(row)
+        item["owner_email"] = row["owner_email"]
+        item["owner_display_name"] = row["owner_display_name"]
+        item["deleted_at"] = row["deleted_at"] if "deleted_at" in row.keys() else None
+        tours_payload.append(item)
+    return jsonify({"tours": tours_payload}), 200
+
 @tours.route("/<tour_id>", methods=["GET"])
 def tours_get(tour_id):
     tour, err = fetch_tour_with_access(tour_id, require_owner=False)
@@ -76,9 +102,17 @@ def tours_get(tour_id):
     scenes = load_tour_scenes_and_hotspots(tour["id"])
     payload = serialize_tour(tour)
     payload["scenes"] = scenes
-    if g.current_user is not None and g.current_user["id"] == tour["owner_id"]:
+    if g.current_user is not None and (g.current_user["id"] == tour["owner_id"] or current_user_is_admin()):
         payload["access_list"] = list_tour_access_entries(tour["id"])
     return jsonify({"tour": payload}), 200
+
+
+@tours.route("/<tour_id>/scenes", methods=["POST"])
+@require_auth
+def tours_add_scene_proxy(tour_id):
+    from backend.blueprints.scenes import tours_add_scene
+
+    return tours_add_scene(tour_id)
 
 @tours.route("/<tour_id>", methods=["PATCH"])
 @require_auth
@@ -168,6 +202,13 @@ def tours_finalize(tour_id):
     db.execute("UPDATE tours SET status = 'published', updated_at = ? WHERE id = ?", (now_iso(), tour["id"]))
     db.commit()
     return jsonify({"gallery_url": gallery_url, "share_url": f"/t/{tour['slug']}", "visibility": tour["visibility"]}), 200
+
+
+@tours.route("/<tour_id>/hotspots/bulk", methods=["POST"])
+@require_auth
+def tours_hotspots_bulk(tour_id):
+    from backend.blueprints.scenes import hotspots_bulk_save
+    return hotspots_bulk_save(tour_id)
 
 @tours.route("/<tour_id>/export/facebook360", methods=["GET"])
 @require_auth

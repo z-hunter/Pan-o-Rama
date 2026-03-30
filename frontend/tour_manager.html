@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Tour Manager - Lokalny Obiektyw</title>
+  <link rel="stylesheet" href="/css/main.css?v=7" />
+  <style>
+    body { background-image: none !important; }
+    .dashboard-container { padding: 48px 0; }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .admin-chip {
+      padding: 8px 12px;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #f59e0b;
+      font: 700 11px/1 "IBM Plex Mono", monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    #tours-grid {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      margin-top: 32px;
+    }
+    .tour-card {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-sidebar);
+      border: 1px solid rgba(72, 72, 71, 0.2);
+      min-width: 0;
+    }
+    .tour-card:hover {
+      border-color: var(--primary);
+      background: var(--bg-surface);
+    }
+    .tour-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background-color: #000;
+      background-size: cover;
+      background-position: center;
+      position: relative;
+    }
+    .tour-card-body {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+    }
+    .tour-meta {
+      display: grid;
+      gap: 6px;
+      font-size: 11px;
+    }
+    .tour-actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: auto;
+    }
+    .tour-footer {
+      padding: 12px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid rgba(72, 72, 71, 0.15);
+      background: rgba(0, 0, 0, 0.22);
+      gap: 10px;
+    }
+    .tour-badges {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: calc(100% - 24px);
+    }
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 20px;
+      align-items: center;
+    }
+    .filter-bar input,
+    .filter-bar select {
+      min-width: 180px;
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">
+      <img src="/img/logo.png" alt="LO" style="height: 32px; width: auto; flex-shrink: 0;" />
+      <span style="letter-spacing: 2px;">TOUR_MANAGER</span>
+    </div>
+    <div class="header-right">
+      <div class="admin-chip">Admin Only</div>
+      <nav class="nav-links">
+        <a href="/dashboard.html" class="nav-link">Tours</a>
+        <a href="/tour-manager.html" class="nav-link active">Tour Manager</a>
+        <a href="/projects.html" class="nav-link">Gallery</a>
+        <a href="/account.html" class="nav-link">Account</a>
+        <button class="btn btn-ghost btn-sm" style="opacity: 0.5;" onclick="logout()">Logout</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container dashboard-container">
+    <div class="flex justify-between items-end" style="gap: 16px; flex-wrap: wrap;">
+      <div>
+        <h1 style="font-size: 28px; color: var(--text);">All Tours</h1>
+        <p class="label-technical" style="margin-top: 8px;">Admin view across all owners, privacy states, drafts, and unpublished tours.</p>
+      </div>
+      <div class="label-technical" id="summaryLine">Loading…</div>
+    </div>
+
+    <div class="filter-bar">
+      <input id="searchInput" placeholder="Search title, slug, owner email..." />
+      <select id="statusFilter">
+        <option value="all">All statuses</option>
+        <option value="published">Published</option>
+        <option value="draft">Draft</option>
+      </select>
+      <select id="visibilityFilter">
+        <option value="all">All visibility</option>
+        <option value="public">Public</option>
+        <option value="private">Private</option>
+      </select>
+      <select id="deletedFilter">
+        <option value="active">Active only</option>
+        <option value="all">Include deleted</option>
+      </select>
+    </div>
+
+    <div id="tours-grid"></div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script>
+    let allTours = [];
+
+    function statusBadgeClass(status) {
+      return status === 'published' ? 'badge-success' : '';
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function getFilteredTours() {
+      const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
+      const status = document.getElementById('statusFilter').value;
+      const visibility = document.getElementById('visibilityFilter').value;
+      const deleted = document.getElementById('deletedFilter').value;
+
+      return allTours.filter((tour) => {
+        const matchesQuery = !q || [
+          tour.title,
+          tour.slug,
+          tour.description,
+          tour.owner_email,
+          tour.owner_display_name,
+        ].some((value) => String(value || '').toLowerCase().includes(q));
+        const matchesStatus = status === 'all' || tour.status === status;
+        const matchesVisibility = visibility === 'all' || tour.visibility === visibility;
+        const matchesDeleted = deleted === 'all' || !tour.deleted_at;
+        return matchesQuery && matchesStatus && matchesVisibility && matchesDeleted;
+      });
+    }
+
+    function renderTours() {
+      const grid = document.getElementById('tours-grid');
+      const tours = getFilteredTours();
+      document.getElementById('summaryLine').textContent = `${tours.length} shown / ${allTours.length} total`;
+
+      if (tours.length === 0) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">No tours match the current filters.</div>';
+        return;
+      }
+
+      grid.innerHTML = tours.map((tour) => {
+        const isPrivate = tour.visibility === 'private';
+        const isDeleted = !!tour.deleted_at;
+        const shareHref = tour.slug ? `/t/${tour.slug}` : '#';
+        return `
+          <div class="tour-card">
+            <div class="tour-thumb" style="background-image: url('${tour.cover_image || '/img/placeholder.png'}')">
+              <div class="tour-badges">
+                <span class="badge ${statusBadgeClass(tour.status)}">${escapeHtml((tour.status || 'draft').toUpperCase())}</span>
+                <span class="badge ${isPrivate ? '' : 'badge-success'}">${isPrivate ? '[PRIVATE]' : '[PUBLIC]'}</span>
+                ${isDeleted ? '<span class="badge" style="background: rgba(220, 38, 38, 0.22); color: #fca5a5; border-color: rgba(220, 38, 38, 0.35);">[DELETED]</span>' : ''}
+              </div>
+            </div>
+            <div class="tour-card-body">
+              <div>
+                <h3 class="mb-2" style="font-size: 16px;">${escapeHtml(tour.title)}</h3>
+                <p class="muted mono" style="font-size: 11px; min-height: 32px;">
+                  ${escapeHtml(tour.description || 'No description provided.')}
+                </p>
+              </div>
+              <div class="tour-meta mono">
+                <div>Owner: ${escapeHtml(tour.owner_email || tour.owner_id)}</div>
+                <div>Name: ${escapeHtml(tour.owner_display_name || 'Unknown')}</div>
+                <div>Slug: ${escapeHtml(tour.slug || '—')}</div>
+                <div>ID: ${escapeHtml(tour.id)}</div>
+              </div>
+              <div class="tour-actions">
+                <button class="btn btn-primary btn-sm" onclick="openStudio('${tour.id}')">STUDIO</button>
+                <button class="btn btn-secondary btn-sm" onclick="openViewer('${shareHref}', ${tour.status === 'published' ? 'true' : 'false'})">VIEW</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteTour('${tour.id}', '${escapeHtml(tour.title)}')">DELETE</button>
+              </div>
+            </div>
+            <div class="tour-footer">
+              <span class="label-technical" style="font-size: 9px; opacity: 0.6;">UPDATED: ${escapeHtml(tour.updated_at || '—')}</span>
+              <span class="label-technical" style="font-size: 9px; opacity: 0.6;">CREATED: ${escapeHtml(tour.created_at || '—')}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadTours() {
+      const grid = document.getElementById('tours-grid');
+      grid.innerHTML = '<div class="label-technical">Loading tours...</div>';
+      const out = await apiFetch('/tours/admin/all');
+      if (!out) return;
+      if (out.res.status === 403) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Admin access required.</div>';
+        return;
+      }
+      if (!out.res.ok) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Failed to load tours.</div>';
+        return;
+      }
+      allTours = out.data.tours || [];
+      renderTours();
+    }
+
+    function openStudio(id) {
+      window.location.href = `/?tour_id=${encodeURIComponent(id)}`;
+    }
+
+    function openViewer(href, isPublished) {
+      if (!isPublished) {
+        showToast('Only published tours have a public player URL.', 'info');
+        return;
+      }
+      window.open(href, '_blank');
+    }
+
+    async function deleteTour(id, title) {
+      if (!confirm(`Delete tour \"${title}\"?`)) return;
+      const out = await apiFetch(`/tours/${id}`, { method: 'DELETE' });
+      if (out && out.res.ok) {
+        showToast('Tour deleted', 'success');
+        await loadTours();
+      } else {
+        showToast(out?.data?.error || 'Failed to delete tour', 'error');
+      }
+    }
+
+    async function init() {
+      const me = await apiFetch('/me');
+      if (!me || !me.res.ok) return;
+      if (!me.data.is_admin) {
+        document.getElementById('tours-grid').innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Admin access required.</div>';
+        return;
+      }
+      ['searchInput', 'statusFilter', 'visibilityFilter', 'deletedFilter'].forEach((id) => {
+        document.getElementById(id).addEventListener('input', renderTours);
+        document.getElementById(id).addEventListener('change', renderTours);
+      });
+      await loadTours();
+    }
+
+    init();
+  </script>
+</body>
+</html>

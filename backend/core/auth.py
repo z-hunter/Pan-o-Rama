@@ -37,6 +37,32 @@ def require_auth(view_fn):
         return view_fn(*args, **kwargs)
     return wrapper
 
+def is_admin_user(user_row):
+    if not user_row:
+        return False
+    try:
+        return bool(int(user_row["is_admin"] or 0))
+    except Exception:
+        return False
+
+def current_user_is_admin():
+    return is_admin_user(getattr(g, "current_user", None))
+
+def can_manage_owner_resource(owner_id):
+    if g.current_user is None:
+        return False
+    return g.current_user["id"] == owner_id or current_user_is_admin()
+
+def require_admin(view_fn):
+    @functools.wraps(view_fn)
+    def wrapper(*args, **kwargs):
+        if g.current_user is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        if not current_user_is_admin():
+            return jsonify({"error": "Forbidden"}), 403
+        return view_fn(*args, **kwargs)
+    return wrapper
+
 def create_session_response(user_row):
     db = get_db()
     session_token = secrets.token_urlsafe(48)
@@ -62,7 +88,8 @@ def create_session_response(user_row):
     payload = {
         "id": user_row["id"], 
         "email": user_row["email"], 
-        "display_name": user_row["display_name"]
+        "display_name": user_row["display_name"],
+        "is_admin": is_admin_user(user_row),
     }
     resp = jsonify({"user": payload})
     max_age = 7 * 24 * 3600

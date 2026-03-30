@@ -297,6 +297,11 @@
         return typeof sourceSettings.default_hfov === "number" ? sourceSettings.default_hfov : 70;
     }
 
+    function toFiniteNumber(value) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+    }
+
     function getCurrentView() {
         if (!window.viewer) {
             return {
@@ -313,11 +318,14 @@
     }
 
     function scheduleViewEnforcement(view) {
-        if (!view || typeof view.pitch !== "number" || typeof view.yaw !== "number") return;
+        const pitch = toFiniteNumber(view && view.pitch);
+        const yaw = toFiniteNumber(view && view.yaw);
+        const hfov = toFiniteNumber(view && view.hfov);
+        if (pitch === null || yaw === null) return;
         pendingView = {
-            pitch: view.pitch,
-            yaw: view.yaw,
-            hfov: typeof view.hfov === "number" ? view.hfov : defaultHfov()
+            pitch,
+            yaw,
+            hfov: hfov === null ? defaultHfov() : hfov
         };
     }
 
@@ -335,6 +343,7 @@
         setTimeout(apply, 220);
         setTimeout(apply, 500);
         setTimeout(apply, 900);
+        setTimeout(apply, 1500);
         pendingView = null;
     }
 
@@ -568,6 +577,10 @@
         const baseId = baseSceneId(targetSceneId);
         if (!baseId) return;
         cancelBackgroundUltraUpgrade();
+        const desiredPitch = toFiniteNumber(pitch);
+        const desiredYaw = toFiniteNumber(yaw);
+        const targetPitch = desiredPitch === null ? 0 : desiredPitch;
+        const targetYaw = desiredYaw === null ? 0 : desiredYaw;
 
         const desiredHfov = typeof hfov === "number"
             ? hfov
@@ -580,22 +593,20 @@
             baseId,
             previewId,
             fullId,
-            pitch,
-            yaw,
+            pitch: targetPitch,
+            yaw: targetYaw,
             hfov: desiredHfov
         };
 
-        if (typeof pitch === "number" && typeof yaw === "number") {
-            scheduleViewEnforcement({ pitch, yaw, hfov: desiredHfov });
-        }
+        scheduleViewEnforcement({ pitch: targetPitch, yaw: targetYaw, hfov: desiredHfov });
 
         transitioning = true;
         beginSceneLoading(previewId ? "Loading preview..." : "Loading scene...");
 
         if (previewId && previewId !== fullId) {
-            safeLoadSceneWithView(previewId, pitch, yaw, desiredHfov);
+            safeLoadSceneWithView(previewId, targetPitch, targetYaw, desiredHfov);
         } else {
-            safeLoadSceneWithView(fullId, pitch, yaw, desiredHfov);
+            safeLoadSceneWithView(fullId, targetPitch, targetYaw, desiredHfov);
         }
     }
 

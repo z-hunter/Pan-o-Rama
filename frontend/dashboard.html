@@ -116,6 +116,7 @@
       
       <nav class="nav-links">
         <a href="/dashboard.html" class="nav-link active">Tours</a>
+        <a href="/tour-manager.html" class="nav-link" id="tour-manager-link" style="display:none;">Tour Manager</a>
         <a href="/projects.html" class="nav-link">Gallery</a>
         <a href="/account.html" class="nav-link">Account</a>
         <button class="btn btn-ghost btn-sm" style="opacity: 0.5;" onclick="logout()">Logout</button>
@@ -175,6 +176,9 @@
       if (!out || !out.res.ok) return;
       const u = out.data;
       document.getElementById('user-name').textContent = u.display_name?.toUpperCase() || 'USER';
+      if (u.is_admin) {
+        document.getElementById('tour-manager-link').style.display = '';
+      }
       const plan = u.plan || {};
       const ent = u.entitlements || {};
       const usage = u.usage || {};

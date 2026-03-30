@@ -24,6 +24,12 @@ def fetch_tour_with_access(tour_id, require_owner=False):
             return None, (jsonify({"error": "Unauthorized"}), 401)
         return tour, None
 
+    try:
+        if int(g.current_user["is_admin"] or 0):
+            return tour, None
+    except Exception:
+        pass
+
     if tour["owner_id"] == g.current_user["id"]:
         return tour, None
 
@@ -66,6 +72,7 @@ def load_tour_scenes_and_hotspots(tour_id):
             "target_name": target_scene["title"] if target_scene else "Unknown",
             "entry_pitch": h["entry_pitch"],
             "entry_yaw": h["entry_yaw"],
+            "distance_m": h["distance_m"] if "distance_m" in h.keys() else None,
             "label": h["label"]
         })
     

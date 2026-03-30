@@ -158,11 +158,12 @@ def serialize_scene(row):
         "processing_error": row["processing_error"],
         "job_id": row["job_id"],
         "pos": {
-            "x": row["pos_x"] if "pos_x" in row.keys() else 0.0,
-            "y": row["pos_y"] if "pos_y" in row.keys() else 0.0,
-            "z": row["pos_z"] if "pos_z" in row.keys() else 0.0,
+            "x": row["pos_x"] if ("pos_x" in row.keys() and row["pos_x"] is not None) else None,
+            "y": row["pos_y"] if ("pos_y" in row.keys() and row["pos_y"] is not None) else None,
+            "z": row["pos_z"] if ("pos_z" in row.keys() and row["pos_z"] is not None) else None,
         },
-        "yaw_offset": row["yaw_offset"] if "yaw_offset" in row.keys() else 0.0,
+        "world_yaw": row["world_yaw"] if ("world_yaw" in row.keys() and row["world_yaw"] is not None) else None,
+        "yaw_offset": row["world_yaw"] if ("world_yaw" in row.keys() and row["world_yaw"] is not None) else None,
     }
 
 def serialize_job(row):

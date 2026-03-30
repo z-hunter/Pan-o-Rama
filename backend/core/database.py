@@ -74,6 +74,10 @@ def init_db():
                 order_index INTEGER NOT NULL,
                 haov REAL NOT NULL DEFAULT 360,
                 vaov REAL NOT NULL DEFAULT 180,
+                pos_x REAL,
+                pos_y REAL,
+                pos_z REAL,
+                world_yaw REAL,
                 scene_type TEXT NOT NULL DEFAULT 'equirectangular',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -88,6 +92,7 @@ def init_db():
                 pitch REAL NOT NULL,
                 entry_yaw REAL,
                 entry_pitch REAL,
+                distance_m REAL,
                 label TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -214,12 +219,22 @@ def init_db():
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_yaw REAL")
         if "entry_pitch" not in cols:
             db.execute("ALTER TABLE hotspots ADD COLUMN entry_pitch REAL")
+        if "distance_m" not in cols:
+            db.execute("ALTER TABLE hotspots ADD COLUMN distance_m REAL")
             
         scene_cols = [r[1] for r in db.execute("PRAGMA table_info(scenes)").fetchall()]
         if "preview_path" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN preview_path TEXT")
         if "audio_path" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN audio_path TEXT")
+        if "pos_x" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN pos_x REAL")
+        if "pos_y" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN pos_y REAL")
+        if "pos_z" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN pos_z REAL")
+        if "world_yaw" not in scene_cols:
+            db.execute("ALTER TABLE scenes ADD COLUMN world_yaw REAL")
         if "processing_status" not in scene_cols:
             db.execute("ALTER TABLE scenes ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'ready'")
         if "processing_error" not in scene_cols:

@@ -57,7 +57,33 @@
             border: 1px solid rgba(255,255,255,0.1) !important; 
             border-radius: 0 !important;
         }
-        
+        .custom-hotspot {
+            height: 50px;
+            width: 50px;
+            background: rgba(0, 123, 255, 0.4);
+            border: 3px solid #fff;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .custom-hotspot::after {
+            content: "";
+            width: 15px;
+            height: 15px;
+            border-top: 5px solid #fff;
+            border-right: 5px solid #fff;
+            transform: rotate(-45deg) translate(-2px, 2px);
+        }
+        .custom-hotspot:hover {
+            background: rgba(0, 123, 255, 0.8);
+            transform: scale(1.2);
+            box-shadow: 0 0 20px #007bff;
+        }
+         
         #top-progress {
             position: absolute; top: 0; left: 0; width: 100%; height: 2px;
             background: transparent; z-index: 1000; display: none;
@@ -164,6 +190,259 @@
         }
         .tour-scene-list { margin-bottom: 24px; }
         .tour-section-title { margin-bottom: 16px; }
+        .studio-subtitle {
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .link-mode-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .linking-status {
+            min-height: 18px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            margin-bottom: 14px;
+        }
+        .spatial-fields {
+            display: none;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            margin-top: 14px;
+            padding-top: 14px;
+        }
+        .spatial-fields.visible {
+            display: block;
+        }
+        .range-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .range-row input[type="range"] {
+            flex: 1;
+        }
+        .scene-spatial-meta {
+            display: grid;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .map-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .map-stage {
+            position: relative;
+            width: 100%;
+            min-height: 360px;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+                radial-gradient(circle at center, rgba(245,158,11,0.08), transparent 60%),
+                #050505;
+            border: 1px solid rgba(245, 158, 11, 0.14);
+            overflow: hidden;
+        }
+        .map-stage.empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+        .map-grid {
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            opacity: 0.18;
+            pointer-events: none;
+        }
+        .map-ground-preview {
+            position: absolute;
+            width: 220px;
+            height: 120px;
+            border-radius: 16px;
+            pointer-events: none;
+            z-index: 20;
+            opacity: 1;
+            overflow: hidden;
+            transform-origin: center center;
+            filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.42));
+            border: 3px solid #f59e0b;
+            background:
+                linear-gradient(180deg, rgba(245,158,11,0.42), rgba(0,0,0,0.12)),
+                #1b1b1b;
+            background-size: cover, 140% 220%;
+            background-position: center, center bottom;
+        }
+        .map-ground-preview img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center bottom;
+            opacity: 0.9;
+            mix-blend-mode: normal;
+        }
+        .map-ground-preview-inner {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(245,158,11,0.18), rgba(0,0,0,0.3));
+        }
+        .map-ground-preview::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: -18px;
+            width: 20px;
+            height: 20px;
+            background: rgba(245, 158, 11, 0.92);
+            transform: translateX(-50%) rotate(45deg);
+            border-right: 2px solid rgba(245, 158, 11, 0.48);
+            border-bottom: 2px solid rgba(245, 158, 11, 0.48);
+        }
+        .map-ground-preview-debug {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.36);
+            color: #fff3cf;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            letter-spacing: 0.08em;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        }
+        .map-debug {
+            position: absolute;
+            left: 12px;
+            top: 12px;
+            z-index: 30;
+            max-width: min(280px, calc(100% - 24px));
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.78);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #d7e3ea;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            pointer-events: none;
+        }
+        .map-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+        }
+        .map-scene-preview {
+            position: relative;
+            height: 112px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background:
+                linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.65) 100%),
+                #111;
+            overflow: hidden;
+        }
+        .map-scene-preview::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image: var(--map-preview-image);
+            background-size: cover;
+            background-position: center bottom;
+            opacity: 0.45;
+            transform: scale(1.05);
+            transform-origin: center bottom;
+        }
+        .map-scene-preview-content {
+            position: absolute;
+            left: 14px;
+            right: 14px;
+            bottom: 12px;
+            z-index: 1;
+        }
+        .map-unknown-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .map-pill {
+            padding: 6px 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .spatial-ring-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 950;
+            pointer-events: none;
+            display: none;
+        }
+        .spatial-ring {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border-radius: 999px;
+            border: 3px solid rgba(6, 182, 212, 0.95);
+            background: radial-gradient(circle at center, rgba(6,182,212,0.16), rgba(6,182,212,0.02) 66%, transparent 72%);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 0 24px rgba(6,182,212,0.18);
+            transform: translate(-50%, -50%) rotateX(72deg);
+            transform-origin: center center;
+            opacity: 0;
+            transition: opacity 120ms ease, transform 120ms ease;
+        }
+        .spatial-ring.visible {
+            opacity: 1;
+        }
+        .spatial-ring.locked {
+            border-color: rgba(245, 158, 11, 0.98);
+            background: radial-gradient(circle at center, rgba(245,158,11,0.18), rgba(245,158,11,0.03) 66%, transparent 72%);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 28px rgba(245,158,11,0.22);
+        }
+        .spatial-ring::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: currentColor;
+            transform: translate(-50%, -50%);
+            opacity: 0.9;
+        }
+        .spatial-ring-label {
+            position: absolute;
+            left: 50%;
+            top: calc(100% + 8px);
+            transform: translateX(-50%) scaleY(1.92);
+            padding: 4px 7px;
+            background: rgba(0,0,0,0.78);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #d6faff;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            white-space: nowrap;
+        }
+        .spatial-ring.locked .spatial-ring-label {
+            color: #ffd18a;
+        }
 
     </style>
 </head>
@@ -172,6 +451,7 @@
         <div class="sidebar-tabs">
             <div class="sidebar-tab active" onclick="switchTab('scenes')">SCENES</div>
             <div class="sidebar-tab" onclick="switchTab('tour')">TOUR</div>
+            <div class="sidebar-tab" onclick="switchTab('map')">MAP</div>
             <div class="sidebar-tab" onclick="switchTab('sharing')">SHARING</div>
         </div>
 
@@ -208,16 +488,42 @@
                     <h3 class="tour-section-title">Scenes</h3>
                     <div id="tourScenesList" class="tour-scene-list mb-8"></div>
                     <h3 class="mb-6">Tour Connections</h3>
-                    <button class="btn mb-6" style="width:100%;" onclick="startLinking()">Add Hotspot</button>
+                    <div class="link-mode-grid">
+                        <button class="btn" style="width:100%;" onclick="startLinking('portal')">Add Hotspot</button>
+                        <button class="btn btn-primary" style="width:100%;" onclick="startLinking('spatial')">Place Spatial Link</button>
+                    </div>
+                    <div id="linkingStatus" class="linking-status">Select a mode, then click inside the panorama.</div>
                     <div id="portalForm" style="display:none; background-color: var(--bg-app);" class="card studio-card mb-6">
+                        <h4 id="portalFormTitle" class="mb-4">Create Link</h4>
                         <label class="label-technical block mb-2">Target Scene</label>
                         <select id="targetScene" class="studio-select mb-4"></select>
-                        <button class="btn btn-sm btn-primary" style="width:100%;" onclick="savePortal()">Save Hotspot</button>
+                        <div id="spatialFields" class="spatial-fields">
+                            <p class="studio-subtitle mb-2">Floor placement uses the current click yaw plus an explicit distance.</p>
+                            <label class="label-technical block mb-2">Estimated Distance</label>
+                            <div class="range-row">
+                                <input type="range" id="spatialDistance" min="1" max="25" step="0.5" value="3">
+                                <span id="spatialDistanceValue" class="mono" style="font-size:11px;">3.0m</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-primary mt-4" style="width:100%;" onclick="savePortal()">Save Link</button>
                     </div>
                     <div class="card studio-card mb-6" style="background-color: var(--bg-app);">
                         <label class="label-technical block mb-2">Incoming Links</label>
                         <select id="incomingLinkSelect" class="studio-select mb-4"></select>
                         <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="storePosForIncomingLink()">Set Entry View</button>
+                    </div>
+                    <div class="card studio-card mb-6" style="background-color: var(--bg-app);">
+                        <label class="label-technical block mb-2">Current Scene Links</label>
+                        <select id="currentSceneLinkSelect" class="studio-select mb-4"></select>
+                        <button class="btn btn-danger btn-sm" style="width:100%;" onclick="removeSelectedLink()">Remove Selected Link</button>
+                    </div>
+                    <div class="card studio-card mb-6" style="background-color: var(--bg-app);">
+                        <h3 class="mb-4">Spatial Alignment</h3>
+                        <div id="sceneSpatialMeta" class="scene-spatial-meta">
+                            <div class="studio-subtitle">No scene selected.</div>
+                        </div>
+                        <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" onclick="setCurrentViewAsWorldNorth()">Use Current View as World North</button>
+                        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="setCurrentSceneAsMapOrigin()">Set Current Scene as Map Origin</button>
                     </div>
                     <h3 class="mt-8 mb-6">Starting Point</h3>
                     <button class="btn btn-secondary btn-sm mb-2" style="width:100%;" id="setStartBtn" onclick="setCurrentSceneAsStart()">Set Current View as Start</button>
@@ -232,6 +538,28 @@
                         </div>
                         <input type="file" id="sceneAudioFile" accept=".mp3,.ogg,.wav,.m4a,.aac,audio/*" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;">
                         <audio id="sceneAudioPreview" style="display:none;"></audio>
+                    </div>
+                </div>
+            </div>
+
+            <div id="panel-map" class="tab-panel">
+                <div class="map-layout">
+                    <div>
+                        <h3 class="mb-2">Spatial Map</h3>
+                        <p class="studio-subtitle">Top-down view of scenes with known coordinates. Spatial links become visible here as the tour is calibrated.</p>
+                    </div>
+                    <div id="mapStage" class="map-stage empty">
+                        NO SPATIAL COORDINATES YET. SET A MAP ORIGIN OR CREATE A SPATIAL LINK.
+                    </div>
+                    <div id="mapScenePreview" class="map-scene-preview" style="--map-preview-image: none;">
+                        <div class="map-scene-preview-content">
+                            <div id="mapScenePreviewTitle" class="mono" style="font-size:12px;">No scene selected</div>
+                            <div id="mapScenePreviewMeta" class="studio-subtitle">Use the lower panorama area to place spatial links on the imaginary floor.</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="mb-3">Scenes Without Coordinates</h4>
+                        <div id="mapUnknownScenes" class="map-unknown-list"></div>
                     </div>
                 </div>
             </div>
@@ -299,6 +627,14 @@
                     </div>
                 </div>
             </div>
+            <div id="spatialRingLayer" class="spatial-ring-layer">
+                <div id="spatialPreviewRing" class="spatial-ring">
+                    <div id="spatialPreviewRingLabel" class="spatial-ring-label">FLOOR PREVIEW</div>
+                </div>
+                <div id="spatialLockedRing" class="spatial-ring locked">
+                    <div id="spatialLockedRingLabel" class="spatial-ring-label">LOCKED</div>
+                </div>
+            </div>
             <div id="pano-editor" style="display:none; width:100%; height:100%;"></div>
         </main>
     </div>
@@ -317,16 +653,547 @@
         let pendingSceneLoadId = null;
         const jobPollers = new Map();
         let previewAudioSceneId = null;
+        let linkPlacementMode = null;
+        let previewRingState = null;
+        let lockedRingState = null;
+        let activeSidebarTab = 'scenes';
+        let mapCameraSyncFrame = null;
+        let lastMapCameraSignature = '';
 
         function getTourIdFromQuery() {
             return new URLSearchParams(window.location.search).get('tour_id');
         }
 
         function switchTab(tabId) {
+            activeSidebarTab = tabId;
             document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
             document.querySelector(`.sidebar-tab[onclick*="${tabId}"]`).classList.add('active');
             document.getElementById(`panel-${tabId}`).classList.add('active');
+            if (tabId === 'map') {
+                renderMapView();
+                startMapCameraSync();
+            } else {
+                stopMapCameraSync();
+            }
+        }
+
+        function getMapCameraSignature() {
+            const activeScene = getActiveScene();
+            const yaw = (viewer && typeof viewer.getYaw === 'function') ? Number(viewer.getYaw()).toFixed(2) : 'na';
+            const hfov = (viewer && typeof viewer.getHfov === 'function') ? Number(viewer.getHfov()).toFixed(2) : 'na';
+            return `${activeScene?.id || 'none'}|${yaw}|${hfov}`;
+        }
+
+        function stopMapCameraSync() {
+            if (mapCameraSyncFrame != null) {
+                cancelAnimationFrame(mapCameraSyncFrame);
+                mapCameraSyncFrame = null;
+            }
+            lastMapCameraSignature = '';
+        }
+
+        function startMapCameraSync() {
+            stopMapCameraSync();
+            const tick = () => {
+                if (activeSidebarTab !== 'map') {
+                    stopMapCameraSync();
+                    return;
+                }
+                const nextSignature = getMapCameraSignature();
+                if (nextSignature !== lastMapCameraSignature) {
+                    lastMapCameraSignature = nextSignature;
+                    renderMapView();
+                }
+                mapCameraSyncFrame = requestAnimationFrame(tick);
+            };
+            tick();
+        }
+
+        function normalizeDegrees(value) {
+            if (typeof value !== 'number' || Number.isNaN(value)) return value;
+            let out = value;
+            while (out <= -180) out += 360;
+            while (out > 180) out -= 360;
+            return out;
+        }
+
+        function hasOwnWorldYaw(scene) {
+            return scene && typeof scene.world_yaw === 'number' && !Number.isNaN(scene.world_yaw);
+        }
+
+        function getStartSceneId() {
+            if (tourSettings.start_scene_id && scenes.some(scene => scene.id === tourSettings.start_scene_id)) {
+                return tourSettings.start_scene_id;
+            }
+            return scenes[0]?.id || null;
+        }
+
+        function deriveTargetPositionFromLink(sourcePos, sourceYaw, hotspot) {
+            if (!sourcePos || typeof sourceYaw !== 'number' || !hotspot || hotspot.distance_m == null) return null;
+            const bearingDeg = normalizeDegrees(Number(hotspot.yaw) - Number(sourceYaw));
+            const bearingRad = bearingDeg * (Math.PI / 180);
+            return {
+                x: Number((sourcePos.x + Math.sin(bearingRad) * Number(hotspot.distance_m)).toFixed(3)),
+                y: Number((sourcePos.y ?? 0).toFixed(3)),
+                z: Number((sourcePos.z + Math.cos(bearingRad) * Number(hotspot.distance_m)).toFixed(3)),
+            };
+        }
+
+        function deriveSourcePositionFromLink(targetPos, sourceYaw, hotspot) {
+            if (!targetPos || typeof sourceYaw !== 'number' || !hotspot || hotspot.distance_m == null) return null;
+            const bearingDeg = normalizeDegrees(Number(hotspot.yaw) - Number(sourceYaw));
+            const bearingRad = bearingDeg * (Math.PI / 180);
+            return {
+                x: Number((targetPos.x - Math.sin(bearingRad) * Number(hotspot.distance_m)).toFixed(3)),
+                y: Number((targetPos.y ?? 0).toFixed(3)),
+                z: Number((targetPos.z - Math.cos(bearingRad) * Number(hotspot.distance_m)).toFixed(3)),
+            };
+        }
+
+        function getComputedSpatialPositions() {
+            const positions = new Map();
+            const startSceneId = getStartSceneId();
+            if (startSceneId) {
+                positions.set(startSceneId, { x: 0, y: 0, z: 0, reason: 'start_scene' });
+            }
+
+            let changed = true;
+            let safety = 0;
+            while (changed && safety < 20) {
+                changed = false;
+                safety += 1;
+
+                scenes.forEach(scene => {
+                    if (!scene?.id || !hasOwnWorldYaw(scene)) return;
+                    const sourcePos = positions.get(scene.id);
+
+                    (scene.hotspots || []).forEach(hotspot => {
+                        const targetScene = scenes.find(item => item.id === hotspot.target_id);
+                        if (!targetScene || !hasOwnWorldYaw(targetScene)) return;
+
+                        const targetPos = positions.get(targetScene.id);
+                        if (sourcePos && !targetPos) {
+                            const derived = deriveTargetPositionFromLink(sourcePos, scene.world_yaw, hotspot);
+                            if (derived) {
+                                positions.set(targetScene.id, { ...derived, reason: 'linked_from_known' });
+                                changed = true;
+                            }
+                        } else if (!sourcePos && targetPos) {
+                            const derived = deriveSourcePositionFromLink(targetPos, scene.world_yaw, hotspot);
+                            if (derived) {
+                                positions.set(scene.id, { ...derived, reason: 'linked_to_known' });
+                                changed = true;
+                            }
+                        }
+                    });
+                });
+            }
+
+            return positions;
+        }
+
+        function getSceneSpatialPosition(scene) {
+            if (!scene?.id) return null;
+            return getComputedSpatialPositions().get(scene.id) || null;
+        }
+
+        function hasKnownScenePosition(scene) {
+            return !!getSceneSpatialPosition(scene);
+        }
+
+        function getSceneAssetUrl(scene) {
+            if (!projectId || !scene) return null;
+            const filename = scene.preview || scene.studio_web || scene.web || scene.panorama;
+            if (!filename) return null;
+            return `/galleries/${projectId}/${scene.id}/${filename}`;
+        }
+
+        function estimateSpatialDistanceFromPitch(pitch) {
+            const clamped = Math.max(-75, Math.min(-5, Number(pitch ?? -18)));
+            const ratio = 1 - ((Math.abs(clamped) - 5) / 70);
+            return Math.max(1, Math.min(25, Number((1.5 + ratio * 8.5).toFixed(1))));
+        }
+
+        function getRingElements() {
+            return {
+                layer: document.getElementById('spatialRingLayer'),
+                preview: document.getElementById('spatialPreviewRing'),
+                previewLabel: document.getElementById('spatialPreviewRingLabel'),
+                locked: document.getElementById('spatialLockedRing'),
+                lockedLabel: document.getElementById('spatialLockedRingLabel'),
+            };
+        }
+
+        function setRingNodePosition(node, labelNode, state) {
+            if (!node || !state) return;
+            node.style.left = `${state.x}px`;
+            node.style.top = `${state.y}px`;
+            const hfov = (viewer && typeof viewer.getHfov === 'function') ? Number(viewer.getHfov()) : 70;
+            const pitch = Number(state.pitch ?? -24);
+            const distance = Math.max(1, Number(state.distance ?? 3));
+            const perspectiveScale = Math.max(0.72, Math.min(1.9, 1.9 - (distance * 0.08)));
+            const hfovScale = Math.max(0.88, Math.min(1.2, 70 / Math.max(45, hfov)));
+            const width = 84 * perspectiveScale * hfovScale;
+            const height = width;
+            const tilt = Math.max(40, 90 + pitch);
+            node.style.width = `${width.toFixed(1)}px`;
+            node.style.height = `${height.toFixed(1)}px`;
+            node.style.transform = `translate(-50%, -50%) rotateX(${tilt.toFixed(1)}deg) scale(${perspectiveScale.toFixed(3)})`;
+            if (labelNode && state.label) labelNode.textContent = state.label;
+        }
+
+        function hideSpatialRings(options = {}) {
+            const { preview, locked, layer } = getRingElements();
+            if (preview) preview.classList.remove('visible');
+            if (locked && !options.keepLocked) locked.classList.remove('visible');
+            if (!options.keepPreview) previewRingState = null;
+            if (!options.keepLocked) lockedRingState = null;
+            if (layer) {
+                const shouldShow = !!(options.keepPreview && previewRingState) || !!(options.keepLocked && lockedRingState);
+                layer.style.display = shouldShow ? 'block' : 'none';
+            }
+        }
+
+        function updateSpatialRingOverlay() {
+            const { layer, preview, previewLabel, locked, lockedLabel } = getRingElements();
+            const shouldShowLayer = linkPlacementMode === 'spatial' && (previewRingState || lockedRingState);
+            if (layer) layer.style.display = shouldShowLayer ? 'block' : 'none';
+            if (preview) {
+                if (linkPlacementMode === 'spatial' && previewRingState) {
+                    setRingNodePosition(preview, previewLabel, previewRingState);
+                    preview.classList.add('visible');
+                } else {
+                    preview.classList.remove('visible');
+                }
+            }
+            if (locked) {
+                if (linkPlacementMode === 'spatial' && lockedRingState) {
+                    setRingNodePosition(locked, lockedLabel, lockedRingState);
+                    locked.classList.add('visible');
+                } else {
+                    locked.classList.remove('visible');
+                }
+            }
+        }
+
+        function captureSpatialRingFromMouse(event, coords, options = {}) {
+            const container = document.getElementById('pano-editor');
+            if (!container || !coords) return null;
+            const rect = container.getBoundingClientRect();
+            const x = Math.max(24, Math.min(rect.width - 24, event.clientX - rect.left));
+            const y = Math.max(30, Math.min(rect.height - 26, event.clientY - rect.top));
+            const distance = Number(options.distance ?? estimateSpatialDistanceFromPitch(coords[0]));
+            return {
+                x,
+                y,
+                yaw: coords[1],
+                pitch: coords[0],
+                distance,
+                label: options.label || `${distance.toFixed(1)}m`,
+            };
+        }
+
+        function setSpatialDistanceDisplay() {
+            const input = document.getElementById('spatialDistance');
+            const valueEl = document.getElementById('spatialDistanceValue');
+            if (!input || !valueEl) return;
+            const distance = Number(input.value);
+            valueEl.textContent = `${distance.toFixed(1)}m`;
+            if (previewRingState) {
+                previewRingState = { ...previewRingState, distance, label: `FLOOR ${distance.toFixed(1)}m` };
+            }
+            if (lockedRingState) {
+                lockedRingState = { ...lockedRingState, distance, label: `${distance.toFixed(1)}m LOCKED` };
+            }
+            updateSpatialRingOverlay();
+        }
+
+        function updatePortalFormMode() {
+            const titleEl = document.getElementById('portalFormTitle');
+            const spatialFields = document.getElementById('spatialFields');
+            const statusEl = document.getElementById('linkingStatus');
+            const isSpatial = linkPlacementMode === 'spatial';
+            if (titleEl) titleEl.textContent = isSpatial ? 'Create Spatial Link' : 'Create Portal Link';
+            if (spatialFields) spatialFields.classList.toggle('visible', isSpatial);
+            if (statusEl && !lastClickCoords) {
+                statusEl.textContent = isSpatial
+                    ? 'Spatial mode active. Click the lower part of the panorama floor, then choose a scene and distance.'
+                    : 'Portal mode active. Click inside the panorama to place a classic hotspot.';
+            }
+            if (!isSpatial) {
+                hideSpatialRings();
+            } else {
+                updateSpatialRingOverlay();
+            }
+        }
+
+        function updateSpatialMetaUI() {
+            const metaEl = document.getElementById('sceneSpatialMeta');
+            if (!metaEl) return;
+            const activeScene = getActiveScene();
+            if (!activeScene) {
+                metaEl.innerHTML = '<div class="studio-subtitle">No scene selected.</div>';
+                return;
+            }
+            const scenePos = getSceneSpatialPosition(activeScene);
+            const posText = scenePos
+                ? `X ${scenePos.x.toFixed(2)} | Z ${scenePos.z.toFixed(2)}`
+                : 'No map coordinates yet';
+            const yawText = typeof activeScene.world_yaw === 'number'
+                ? `${activeScene.world_yaw.toFixed(1)}°`
+                : 'Not calibrated';
+            metaEl.innerHTML = `
+                <div class="mono" style="font-size:12px;">${activeScene.name}</div>
+                <div class="studio-subtitle">Map Position: ${posText}</div>
+                <div class="studio-subtitle">World North Reference: ${yawText}</div>
+            `;
+        }
+
+        function renderMapView() {
+            const stage = document.getElementById('mapStage');
+            const preview = document.getElementById('mapScenePreview');
+            const previewTitle = document.getElementById('mapScenePreviewTitle');
+            const previewMeta = document.getElementById('mapScenePreviewMeta');
+            const unknownEl = document.getElementById('mapUnknownScenes');
+            if (!stage || !preview || !previewTitle || !previewMeta || !unknownEl) return;
+
+            const activeScene = getActiveScene();
+            const computedPositions = getComputedSpatialPositions();
+            const knownScenes = scenes.filter(scene => computedPositions.has(scene.id));
+            const unknownScenes = scenes.filter(scene => !hasKnownScenePosition(scene));
+            const previewUrl = getSceneAssetUrl(activeScene);
+            preview.style.setProperty('--map-preview-image', previewUrl ? `url("${previewUrl}")` : 'none');
+            previewTitle.textContent = activeScene ? activeScene.name : 'No scene selected';
+            previewMeta.textContent = activeScene
+                ? (typeof activeScene.world_yaw === 'number'
+                    ? `World north is calibrated at local yaw ${activeScene.world_yaw.toFixed(1)}°.`
+                    : 'Set “Use Current View as World North” to align this panorama to the shared world yaw.')
+                : 'Use the lower panorama area to place spatial links on the imaginary floor.';
+
+            unknownEl.innerHTML = scenes.length === 0
+                ? '<span class="map-pill">No scenes in this tour yet.</span>'
+                : (unknownScenes.length
+                    ? unknownScenes.map(scene => `<span class="map-pill">${scene.name}</span>`).join('')
+                    : '<span class="map-pill">All scenes currently have coordinates.</span>');
+
+            if (!knownScenes.length) {
+                stage.className = 'map-stage empty';
+                stage.innerHTML = 'NO SPATIAL COORDINATES YET. SET A MAP ORIGIN OR CREATE A SPATIAL LINK.';
+                return;
+            }
+
+            const xs = knownScenes.map(scene => computedPositions.get(scene.id).x);
+            const zs = knownScenes.map(scene => computedPositions.get(scene.id).z);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minZ = Math.min(...zs);
+            const maxZ = Math.max(...zs);
+            const width = Math.max(1, maxX - minX);
+            const height = Math.max(1, maxZ - minZ);
+            const pad = 44;
+            const stageW = 720;
+            const stageH = 380;
+
+            const project = (x, z) => {
+                const px = pad + ((x - minX) / width) * (stageW - pad * 2);
+                const py = stageH - pad - ((z - minZ) / height) * (stageH - pad * 2);
+                return { x: px, y: py };
+            };
+
+            let activeCameraMarkup = '';
+            let activeGroundPreviewData = null;
+            let mapDebugText = '';
+            if (activeScene) {
+                const activePos = computedPositions.get(activeScene.id);
+                mapDebugText += `activeScene=${activeScene.id}\n`;
+                mapDebugText += `computedPos=${activePos ? `${activePos.x.toFixed(2)},${activePos.z.toFixed(2)}` : 'none'}\n`;
+                if (activePos) {
+                    const previewAssetUrl = getSceneAssetUrl(activeScene);
+                    mapDebugText += `previewAssetUrl=${previewAssetUrl || 'none'}\n`;
+                    const activePt = project(activePos.x, activePos.z);
+                    const hasViewerYaw = viewer && typeof viewer.getYaw === 'function';
+                    const hasWorldYaw = typeof activeScene.world_yaw === 'number';
+                    mapDebugText += `hasViewerYaw=${hasViewerYaw} hasWorldYaw=${hasWorldYaw}\n`;
+                    const worldBearingDeg = hasViewerYaw && hasWorldYaw
+                        ? normalizeDegrees(Number(viewer.getYaw()) - Number(activeScene.world_yaw))
+                        : 0;
+                    const worldBearingRad = worldBearingDeg * (Math.PI / 180);
+                    if (hasViewerYaw && hasWorldYaw) {
+                        const arrowLength = 46;
+                        const tipX = activePt.x + Math.sin(worldBearingRad) * arrowLength;
+                        const tipY = activePt.y - Math.cos(worldBearingRad) * arrowLength;
+                        const leftRad = worldBearingRad + (Math.PI * 0.82);
+                        const rightRad = worldBearingRad - (Math.PI * 0.82);
+                        const headSize = 12;
+                        const leftX = tipX + Math.sin(leftRad) * headSize;
+                        const leftY = tipY - Math.cos(leftRad) * headSize;
+                        const rightX = tipX + Math.sin(rightRad) * headSize;
+                        const rightY = tipY - Math.cos(rightRad) * headSize;
+                        activeCameraMarkup = `
+                            <line x1="${activePt.x}" y1="${activePt.y}" x2="${tipX}" y2="${tipY}" stroke="#ffd18a" stroke-width="3" stroke-linecap="round" />
+                            <polygon points="${tipX},${tipY} ${leftX},${leftY} ${rightX},${rightY}" fill="#ffd18a" />
+                        `;
+                    }
+                    if (previewAssetUrl) {
+                        const previewRotation = worldBearingDeg;
+                        const previewWidth = 220;
+                        const previewHeight = 120;
+                        const previewLeft = Math.max(8, Math.min(stageW - previewWidth - 8, activePt.x - (previewWidth / 2)));
+                        const previewTop = Math.max(64, Math.min(stageH - previewHeight - 16, activePt.y - previewHeight - 24));
+                        mapDebugText += `groundPreview=rendered rotation=${previewRotation.toFixed(1)}\n`;
+                        mapDebugText += `previewBox=${previewLeft.toFixed(1)},${previewTop.toFixed(1)}\n`;
+                        activeGroundPreviewData = {
+                            left: previewLeft,
+                            top: previewTop,
+                            rotation: previewRotation,
+                            url: previewAssetUrl,
+                        };
+                    } else {
+                        mapDebugText += `groundPreview=skipped_no_asset\n`;
+                    }
+                } else {
+                    mapDebugText += `groundPreview=skipped_no_position\n`;
+                }
+            } else {
+                mapDebugText = 'activeScene=none';
+            }
+
+            const seenLinks = new Set();
+            const lineMarkup = [];
+            scenes.forEach(scene => {
+                const sourcePos = computedPositions.get(scene.id);
+                if (!sourcePos) return;
+                (scene.hotspots || []).forEach(hotspot => {
+                    if (hotspot.distance_m == null) return;
+                    const target = scenes.find(item => item.id === hotspot.target_id);
+                    const targetPos = target ? computedPositions.get(target.id) : null;
+                    if (!target || !targetPos) return;
+                    const key = [scene.id, target.id].sort().join(':');
+                    if (seenLinks.has(key)) return;
+                    seenLinks.add(key);
+                    const a = project(sourcePos.x, sourcePos.z);
+                    const b = project(targetPos.x, targetPos.z);
+                    lineMarkup.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(245,158,11,0.38)" stroke-width="2" />`);
+                });
+            });
+
+            const pointMarkup = knownScenes.map(scene => {
+                const scenePos = computedPositions.get(scene.id);
+                const pt = project(scenePos.x, scenePos.z);
+                const active = activeScene && activeScene.id === scene.id;
+                return `
+                    <g style="cursor:pointer;" onclick="loadScene('${scene.id}')">
+                        <circle cx="${pt.x}" cy="${pt.y}" r="${active ? 9 : 6}" fill="${active ? '#f59e0b' : '#81ecff'}" stroke="rgba(0,0,0,0.65)" stroke-width="2" />
+                        <text x="${pt.x + 12}" y="${pt.y - 10}" fill="rgba(255,255,255,0.92)" font-size="11" font-family="JetBrains Mono, monospace">${scene.name.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</text>
+                    </g>
+                `;
+            }).join('');
+
+            stage.className = 'map-stage';
+            stage.innerHTML = `
+                <div class="map-grid"></div>
+                <svg class="map-svg" viewBox="0 0 ${stageW} ${stageH}" preserveAspectRatio="none">
+                    ${lineMarkup.join('')}
+                    ${activeCameraMarkup}
+                    ${pointMarkup}
+                </svg>
+                <div class="map-debug">${mapDebugText}</div>
+            `;
+
+            if (activeGroundPreviewData) {
+                const groundPreview = document.createElement('div');
+                groundPreview.className = 'map-ground-preview';
+                groundPreview.style.left = `${activeGroundPreviewData.left.toFixed(1)}px`;
+                groundPreview.style.top = `${activeGroundPreviewData.top.toFixed(1)}px`;
+                groundPreview.style.transform = 'none';
+
+                const img = document.createElement('img');
+                img.src = activeGroundPreviewData.url;
+                img.alt = 'Ground preview';
+
+                const overlay = document.createElement('div');
+                overlay.className = 'map-ground-preview-inner';
+
+                const debug = document.createElement('div');
+                debug.className = 'map-ground-preview-debug';
+                debug.textContent = 'GROUND PREVIEW';
+
+                groundPreview.appendChild(img);
+                groundPreview.appendChild(overlay);
+                groundPreview.appendChild(debug);
+                stage.appendChild(groundPreview);
+            }
+        }
+
+        async function persistSceneSpatial(scene, successMessage = null) {
+            if (!scene) return false;
+            const payload = {
+                pos: scene.pos || {},
+                world_yaw: scene.world_yaw ?? null,
+            };
+            const out = await apiFetch(`/scenes/${scene.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (out && out.res.ok && out.data.scene) {
+                const idx = scenes.findIndex(item => item.id === scene.id);
+                if (idx >= 0) scenes[idx] = { ...scenes[idx], ...out.data.scene };
+                updateScenesUI();
+                renderMapView();
+                if (successMessage) showToast(successMessage, 'success');
+                return true;
+            }
+            showToast(out?.data?.error || 'Failed to save spatial metadata', 'error');
+            return false;
+        }
+
+        async function persistHotspots() {
+            if (!projectId) return false;
+            const payload = {};
+            scenes.forEach(scene => {
+                payload[scene.id] = (scene.hotspots || []).map(hotspot => ({
+                    id: hotspot.id,
+                    pitch: hotspot.pitch,
+                    yaw: hotspot.yaw,
+                    target_id: hotspot.target_id,
+                    entry_pitch: hotspot.entry_pitch ?? null,
+                    entry_yaw: hotspot.entry_yaw ?? null,
+                    distance_m: hotspot.distance_m ?? null,
+                    label: hotspot.label ?? null,
+                }));
+            });
+            const out = await apiFetch(`/tours/${projectId}/hotspots/bulk`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (out && out.res.ok && Array.isArray(out.data.scenes)) {
+                scenes = out.data.scenes;
+                updateScenesUI();
+                renderMapView();
+                return true;
+            }
+            showToast(out?.data?.error || 'Failed to save links', 'error');
+            return false;
+        }
+
+        function applyEstimatedTargetPosition(sourceScene, targetScene, clickYaw, distanceM) {
+            if (!sourceScene || !targetScene) return false;
+            if (typeof sourceScene.world_yaw !== 'number') return false;
+            if (typeof targetScene.world_yaw !== 'number') return false;
+            const sourcePos = getSceneSpatialPosition(sourceScene);
+            if (!sourcePos) return false;
+            if (hasKnownScenePosition(targetScene)) return false;
+            const bearingDeg = normalizeDegrees(clickYaw - sourceScene.world_yaw);
+            const bearingRad = bearingDeg * (Math.PI / 180);
+            targetScene.pos = {
+                x: Number((sourcePos.x + Math.sin(bearingRad) * distanceM).toFixed(3)),
+                y: sourcePos.y ?? 0,
+                z: Number((sourcePos.z + Math.cos(bearingRad) * distanceM).toFixed(3)),
+            };
+            return true;
         }
 
         function refreshPlanGatedActions() {
@@ -600,6 +1467,20 @@
             )).join('');
         }
 
+        function populateCurrentSceneLinksSelect() {
+            const select = document.getElementById('currentSceneLinkSelect');
+            if (!select) return;
+            const activeScene = getActiveScene();
+            if (!activeScene || !Array.isArray(activeScene.hotspots) || activeScene.hotspots.length === 0) {
+                select.innerHTML = '<option value="">No links on this scene</option>';
+                return;
+            }
+            select.innerHTML = activeScene.hotspots.map((hotspot, idx) => {
+                const targetName = scenes.find(scene => scene.id === hotspot.target_id)?.name || hotspot.target_name || 'Unknown scene';
+                return `<option value="${idx}">${activeScene.name} -> ${targetName}</option>`;
+            }).join('');
+        }
+
         function updateScenesUI() {
             if (document.getElementById('scene-count-badge')) document.getElementById('scene-count-badge').textContent = scenes.length;
             renderSceneList('scenesList', { allowDelete: true });
@@ -607,7 +1488,10 @@
             document.getElementById('tour-empty-state').style.display = scenes.length > 0 ? 'none' : 'block';
             document.getElementById('tour-controls').style.display = scenes.length > 0 ? 'block' : 'none';
             populateIncomingLinksSelect();
+            populateCurrentSceneLinksSelect();
             updateSceneAudioUI();
+            updateSpatialMetaUI();
+            renderMapView();
         }
 
         function getActiveScene() {
@@ -780,6 +1664,32 @@
             el.classList.add('visible');
         }
 
+        function toFiniteNumber(value) {
+            const num = Number(value);
+            return Number.isFinite(num) ? num : null;
+        }
+
+        function enforceStudioView(targetView) {
+            if (!viewer || !targetView) return;
+            const pitch = toFiniteNumber(targetView.pitch);
+            const yaw = toFiniteNumber(targetView.yaw);
+            if (pitch === null || yaw === null) return;
+            const hfov = toFiniteNumber(targetView.hfov) ?? tourSettings.default_hfov;
+            const apply = () => {
+                if (!viewer) return;
+                try {
+                    viewer.lookAt(pitch, yaw, hfov, 0);
+                    viewer.setHfov(hfov, 0);
+                } catch (_) {}
+            };
+            apply();
+            setTimeout(apply, 80);
+            setTimeout(apply, 220);
+            setTimeout(apply, 500);
+            setTimeout(apply, 900);
+            setTimeout(apply, 1500);
+        }
+
         function loadScene(id, tp, ty, ep, ey, options = {}) {
             const s = scenes.find(x => x.id === id);
             if (!s || (s.processing_status && s.processing_status !== 'ready')) return Promise.resolve(false);
@@ -787,7 +1697,10 @@
             activeSceneId = id; updateScenesUI();
             const url = `/galleries/${projectId}/${id}/${s.web || s.panorama}`;
             const config = { "type": s.type || "equirectangular", "hfov": tourSettings.default_hfov, "haov": s.haov || 360, "vaov": s.vaov || 180, "panorama": url, "autoLoad": true, "hotSpots": (s.hotspots || []).map(h => ({ pitch: h.pitch, yaw: h.yaw, cssClass: "custom-hotspot", clickHandlerFunc: () => loadScene(h.target_id, null, null, h.entry_pitch, h.entry_yaw) })) };
-            if (ep !== undefined) config.pitch = ep; if (ey !== undefined) config.yaw = ey;
+            const targetPitch = toFiniteNumber(ep) ?? 0;
+            const targetYaw = toFiniteNumber(ey) ?? 0;
+            config.pitch = targetPitch;
+            config.yaw = targetYaw;
             if (viewer) viewer.destroy();
             if (showLoader) {
                 setViewerLoading(true, {
@@ -799,9 +1712,82 @@
             }
             document.getElementById('step1-workspace').style.display = 'none';
             document.getElementById('pano-editor').style.display = 'block';
+            hideSpatialRings();
             viewer = pannellum.viewer('pano-editor', config);
+            viewer.on('mousemove', (e) => {
+                if (linkPlacementMode !== 'spatial') return;
+                const coords = viewer.mouseEventToCoords(e);
+                if (!coords) return;
+                const statusEl = document.getElementById('linkingStatus');
+                if (coords[0] > -4) {
+                    previewRingState = null;
+                    if (statusEl && !lastClickCoords) {
+                        statusEl.textContent = 'Move lower in the panorama until the floor ring appears.';
+                    }
+                    updateSpatialRingOverlay();
+                    return;
+                }
+                const currentDistance = Number(document.getElementById('spatialDistance')?.value || estimateSpatialDistanceFromPitch(coords[0]));
+                previewRingState = captureSpatialRingFromMouse(e, coords, {
+                    distance: currentDistance,
+                    label: `FLOOR ${currentDistance.toFixed(1)}m`,
+                });
+                if (statusEl && !lastClickCoords) {
+                    statusEl.textContent = `Spatial preview at yaw ${coords[1].toFixed(2)}°, pitch ${coords[0].toFixed(2)}°. Click to lock the floor ring.`;
+                }
+                updateSpatialRingOverlay();
+            });
+            viewer.on('mouseleave', () => {
+                if (linkPlacementMode !== 'spatial') return;
+                previewRingState = null;
+                updateSpatialRingOverlay();
+            });
+            viewer.on('mousedown', (e) => {
+                if (!linkPlacementMode) return;
+                const coords = viewer.mouseEventToCoords(e);
+                if (!coords) return;
+                lastClickCoords = coords;
+                const yaw = Number(coords[1]).toFixed(2);
+                const pitch = Number(coords[0]).toFixed(2);
+                const statusEl = document.getElementById('linkingStatus');
+                if (statusEl) {
+                    statusEl.textContent = linkPlacementMode === 'spatial'
+                        ? `Spatial point selected at yaw ${yaw}°, pitch ${pitch}°. Choose a target and confirm distance.`
+                        : `Portal point selected at yaw ${yaw}°, pitch ${pitch}°. Choose a target scene.`;
+                }
+                if (linkPlacementMode === 'spatial') {
+                    const distanceInput = document.getElementById('spatialDistance');
+                    if (distanceInput) {
+                        distanceInput.value = estimateSpatialDistanceFromPitch(coords[0]);
+                        setSpatialDistanceDisplay();
+                    }
+                    if (coords[0] > -4) {
+                        showToast('For floor placement, click lower in the panorama where the ground would be visible.', 'info');
+                        previewRingState = null;
+                        lockedRingState = null;
+                        updateSpatialRingOverlay();
+                        return;
+                    }
+                    const distance = Number(document.getElementById('spatialDistance')?.value || estimateSpatialDistanceFromPitch(coords[0]));
+                    lockedRingState = captureSpatialRingFromMouse(e, coords, {
+                        distance,
+                        label: `${distance.toFixed(1)}m LOCKED`,
+                    });
+                    updateSpatialRingOverlay();
+                }
+                document.getElementById('portalForm').style.display = 'block';
+                updatePortalFormMode();
+                const sel = document.getElementById('targetScene');
+                sel.innerHTML = '<option value="">Target...</option>';
+                scenes.filter(x => x.id !== activeSceneId).forEach(x => sel.innerHTML += `<option value="${x.id}">${x.name}</option>`);
+            });
             return new Promise((resolve) => {
                 const finalizeLoad = () => {
+                    enforceStudioView({
+                        pitch: targetPitch,
+                        yaw: targetYaw,
+                        hfov: tourSettings.default_hfov,
+                    });
                     if (showLoader) {
                         setViewerLoading(true, {
                             title: "Studio Ready",
@@ -817,15 +1803,6 @@
                 viewer.on('load', finalizeLoad);
                 viewer.on('scenechangefadedone', finalizeLoad);
                 setTimeout(finalizeLoad, 1800);
-            }).finally(() => {
-                viewer.on('mousedown', (e) => {
-                const c = viewer.mouseEventToCoords(e); lastClickCoords = c;
-                if (document.getElementById('linkingStatus')) document.getElementById('linkingStatus').textContent = `P: ${c[0].toFixed(2)} | Y: ${c[1].toFixed(2)}`;
-                document.getElementById('portalForm').style.display = 'block';
-                const sel = document.getElementById('targetScene');
-                sel.innerHTML = '<option value="">Target...</option>';
-                scenes.filter(x => x.id !== activeSceneId).forEach(x => sel.innerHTML += `<option value="${x.id}">${x.name}</option>`);
-            });
             });
         }
 
@@ -833,13 +1810,22 @@
             if (viewer) viewer.destroy();
             document.getElementById('pano-editor').style.display = 'none';
             document.getElementById('step1-workspace').style.display = 'flex';
+            hideSpatialRings();
+            stopMapCameraSync();
             setViewerLoading(false);
         }
 
-        function startLinking() {
+        function startLinking(mode = 'portal') {
             if (!activeSceneId) return showToast("Open a scene first.", "error");
-            document.getElementById('portalForm').style.display = 'block';
-            showToast("Click inside the panorama to place a hotspot.");
+            linkPlacementMode = mode;
+            lastClickCoords = null;
+            previewRingState = null;
+            lockedRingState = null;
+            document.getElementById('portalForm').style.display = 'none';
+            updatePortalFormMode();
+            showToast(mode === 'spatial'
+                ? "Spatial mode armed. Click the lower panorama floor area, then choose a target scene."
+                : "Portal mode armed. Click inside the panorama to place a hotspot.");
         }
 
         async function setCurrentSceneAsStart() {
@@ -863,7 +1849,7 @@
             }
         }
 
-        function storePosForIncomingLink() {
+        async function storePosForIncomingLink() {
             if (!viewer || !activeSceneId) return showToast("Open a scene first.", "error");
             const val = document.getElementById('incomingLinkSelect').value;
             if (!val || !val.includes(':')) return showToast("Select an incoming link first.", "error");
@@ -873,7 +1859,53 @@
             if (!source || !source.hotspots || !source.hotspots[hotspotIndex]) return showToast("Incoming link not found.", "error");
             source.hotspots[hotspotIndex].entry_pitch = viewer.getPitch();
             source.hotspots[hotspotIndex].entry_yaw = viewer.getYaw();
-            showToast('Entry view saved', 'success');
+            const ok = await persistHotspots();
+            if (ok) showToast('Entry view saved', 'success');
+        }
+
+        async function removeSelectedLink() {
+            const activeScene = getActiveScene();
+            const select = document.getElementById('currentSceneLinkSelect');
+            if (!activeScene || !select) return showToast('Open a scene first.', 'error');
+            const idx = Number(select.value);
+            if (!Number.isInteger(idx) || idx < 0 || !Array.isArray(activeScene.hotspots) || !activeScene.hotspots[idx]) {
+                return showToast('Select a link to remove.', 'error');
+            }
+            activeScene.hotspots.splice(idx, 1);
+            const ok = await persistHotspots();
+            if (!ok) return;
+            await loadScene(activeScene.id, null, null, null, null, { showLoader: false });
+            showToast('Link removed', 'success');
+        }
+
+        async function setCurrentViewAsWorldNorth() {
+            const activeScene = getActiveScene();
+            if (!activeScene || !viewer) return showToast('Open a scene first.', 'error');
+            activeScene.world_yaw = normalizeDegrees(viewer.getYaw());
+            await persistSceneSpatial(activeScene, 'World north reference saved');
+        }
+
+        async function setCurrentSceneAsMapOrigin() {
+            const activeScene = getActiveScene();
+            if (!activeScene || !projectId) return showToast('Open a scene first.', 'error');
+            const payload = {
+                start_scene_id: activeScene.id,
+                start_pitch: tourSettings.start_pitch,
+                start_yaw: tourSettings.start_yaw,
+                default_hfov: tourSettings.default_hfov,
+            };
+            const out = await apiFetch(`/tours/${projectId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (out && out.res.ok) {
+                tourSettings = { ...tourSettings, ...payload };
+                updateScenesUI();
+                showToast('Map origin moved to current start scene', 'success');
+            } else {
+                showToast(out?.data?.error || 'Failed to move map origin', 'error');
+            }
         }
 
         function downloadFacebook360FirstScene() {
@@ -901,11 +1933,31 @@
             const tid = document.getElementById('targetScene').value;
             if (!tid || !lastClickCoords) return;
             const cur = scenes.find(x => x.id === activeSceneId);
+            const targetScene = scenes.find(x => x.id === tid);
+            const isSpatial = linkPlacementMode === 'spatial';
+            const distanceM = isSpatial ? Number(document.getElementById('spatialDistance').value || 0) : null;
             cur.hotspots = cur.hotspots || [];
-            cur.hotspots.push({ pitch: lastClickCoords[0], yaw: lastClickCoords[1], target_id: tid });
+            cur.hotspots.push({
+                pitch: lastClickCoords[0],
+                yaw: lastClickCoords[1],
+                target_id: tid,
+                distance_m: isSpatial ? distanceM : null,
+            });
             viewer.addHotSpot({ pitch: lastClickCoords[0], yaw: lastClickCoords[1], cssClass: "custom-hotspot", clickHandlerFunc: () => loadScene(tid) });
             document.getElementById('portalForm').style.display = 'none';
-            showToast('LINKED');
+            let savedTargetPos = false;
+            if (isSpatial && targetScene && applyEstimatedTargetPosition(cur, targetScene, lastClickCoords[1], distanceM)) {
+                savedTargetPos = await persistSceneSpatial(targetScene);
+            }
+            const hotspotsSaved = await persistHotspots();
+            if (hotspotsSaved) {
+                linkPlacementMode = null;
+                lastClickCoords = null;
+                previewRingState = null;
+                lockedRingState = null;
+                updatePortalFormMode();
+                showToast(savedTargetPos ? 'Spatial link saved and target placed on map' : 'Link saved', 'success');
+            }
         }
 
         async function finalizeTour() {
@@ -939,6 +1991,9 @@
             previewAudioSceneId = null;
             updateSceneAudioUI();
         });
+
+        document.getElementById('spatialDistance').addEventListener('input', setSpatialDistanceDisplay);
+        setSpatialDistanceDisplay();
 
         (async function bootstrap() {
             await loadCurrentUser();
